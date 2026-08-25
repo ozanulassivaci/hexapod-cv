@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 
 @dataclass
 class StreamConfig:
-    url: str = "http://<IPOD_IP>:4747/video/640x480"
+    url: str = "http://192.168.0.52:4747/video/640x480"
     retry_backoff_base_s: float = 1.0
     retry_backoff_max_s: float = 30.0
 
