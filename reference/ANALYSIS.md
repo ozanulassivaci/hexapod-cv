@@ -77,78 +77,105 @@ on a reader re-deriving the acos range to trust it, and it will fail loudly
 (negative servo command) instead of silently if the invariant is ever
 broken.
 
-## 3. Leg mirroring — the math is correct, and here's the proof
+## 3. Leg mirroring — corrected: single leg STL, no L/R variants
 
-This is the question you most need a clear answer on, so I worked it
-through with numbers rather than asserting an opinion.
+**Correction note**: the first pass of this analysis concluded the code
+required mirrored (mirror-image) leg brackets to be correct, based on a
+worked example. That conclusion was wrong — not the arithmetic, the
+inference drawn from it. Confirmed by checking the STL files: all six legs
+are printed from the **same** part, no mirrored variant exists. Re-derived
+below with the correct diagnostic, and the corrected conclusion is the
+opposite of the original one: uniform, non-mirrored parts are exactly what
+this code requires, and mirrored parts are what would have broken it.
 
-**What the origin-angle rotation actually does.** `origin.z = atan2(y, x)`
-is each leg's mount angle around the hexagonal body. `calculate_ik` rotates
-the body-frame target into that leg's local frame by `-origin.z` before
-solving. This is a **pure rotation** (determinant +1) — it re-expresses
-"where is the target relative to body center" as "where is the target
-relative to this leg's own outward-pointing axis." It is emphatically not a
-mirror/reflection (determinant −1). So the question "does this rotation
-handle mechanical mirroring" doesn't quite have a yes/no answer as stated —
-rotation and reflection are different operations, and only one of them is
-present in this code. What matters is whether that's actually the right
-operation for this hardware, which is what I checked next.
+**Where the original derivation went wrong.** It tested "move the foot by
+the same body-frame nudge `+δ` toward the front" for RM and LM, and found
+opposite-signed coxa deltas (`+δ/R` for RM, `-δ/R` for LM). That arithmetic
+is correct, but it doesn't test what it was used to argue: a body-frame
+*translation* target naturally requires opposite-signed local coxa deltas
+at two mount angles that are themselves mirror images (`origin.z = -90°`
+vs `+90°`) — regardless of whether the underlying hardware is mirrored or
+identical. It conflates "where around the ring the leg sits" (which
+legitimately flips the sign for a translation test) with "which rotational
+sense the servo drives" (which is the thing that actually depends on part
+chirality). Those are different questions; the translation test only
+answers the first one.
 
-**Worked example.** Take the two middle legs: RM at `(0, -105.72)` →
-`origin.z = -π/2`, and LM at `(0, 105.72)` → `origin.z = +π/2`. Ask both
-legs to move their foot by the same body-frame nudge `+δ` on x ("swing
-toward the front"), holding y and z fixed at their home values, and solve
-`angles.x` (the coxa angle) for each:
+**The correct diagnostic: does the same servo-command direction always
+produce the same absolute rotational sense?** From `calculate_fk`,
+`alpha_world = angles.x + pos.z` where `pos.z = origin.z`. `calculate_ik`
+solves `angles.x` as exactly the inverse of that relation, so structurally,
+for every leg:
 
-- **RM**: home sits along `-y` from its origin, so before rotation
-  `relativeTarget ≈ (δ, -R)` for leg-extension `R > 0`. Rotating by
-  `-origin.z = +π/2` gives local `(R, δ)`. `angles.x = atan2(δ, R) ≈ +δ/R`.
-  → coxa servo commanded **above** 90.
-- **LM**: home sits along `+y`, so before rotation `relativeTarget ≈ (δ, R)`.
-  Rotating by `-origin.z = -π/2` gives local `(R, -δ)`. `angles.x =
-  atan2(-δ, R) ≈ -δ/R`. → coxa servo commanded **below** 90.
+```
+d(alpha_world) / d(angles.x) = 1
+```
 
-Same body-frame motion, opposite-signed servo commands. This isn't
-coincidence — the six mount origins are exact y-mirrors of each other
-across the three L/R pairs (RF/LF, RM/LM, RR/LR all share the same x, and
-negate y), so `origin.z` for each pair is `θ` and `-θ`, and the algebra
-above generalizes to all three pairs by that symmetry. **The coordinate
-math genuinely produces mirrored servo commands for mirrored feet.**
+This holds identically for all six legs — it falls straight out of the
+formula, no per-leg case analysis needed, because `origin.z` is a per-leg
+*constant offset*, not something that changes the derivative. That means
+increasing the coxa servo command always rotates the foot in the same
+absolute (body-frame) rotational sense, for every leg, with no sign flip
+anywhere. Concrete check with RM (`origin.z = -90°`) and LM (`origin.z =
++90°`), nudging `angles.x` by `+1°` at each leg's neutral pose:
 
-**Why this is still not a complete guarantee.** A mirrored math output only
-produces mirrored *physical motion* if the servo itself is mounted in a
-mirrored physical orientation between the left and right leg of each pair —
-i.e. the leg brackets are true mirror-image parts (mirrored STL/laser
-pattern), not the same part just relocated and rotated 180° around the
-ring. This is the standard construction for hexapod kits (mirrored bracket
-pairs are cheap to produce and are the normal way to solve exactly this
-problem), and everything about this firmware — no per-leg sign flag, no
-comment addressing L/R at all, uniform formula applied identically across
-all six legs — is consistent with the author having built it that way and
-relying on the hardware to make the uniform formula correct.
+- **RM**: `alpha_world` goes from `-90°` to `-89°` — rotating toward `0°`
+  (front). CCW in standard math convention.
+- **LM**: `alpha_world` goes from `+90°` to `+91°` — rotating toward `180°`
+  (rear). Also CCW — same sense, `+1°` in, `+1°` out, both cases.
 
-**Bottom line**: I cannot verify the physical bracket geometry from source
-code alone — that's a hardware fact this file doesn't contain. But the
-*software* is doing the right thing (producing genuinely mirrored commands,
-correctly derived), and the standard construction for this class of kit
-supports it working as-is. The place this can still go wrong is assembly
-error, not this code: if even one leg's bracket was printed/assembled as a
-non-mirrored duplicate instead of a true mirror image (an easy mistake —
-mirrored parts often look nearly identical at a glance), that single leg
-will step backwards with no symptom anywhere in software except the robot
-visibly limping on power-up. **Recommendation**: add a power-on, one-leg-
-at-a-time "wave test" to the port (each leg lifts and taps forward in
-sequence, operator visually confirms direction before gait is armed), and
-give each leg a `sign: int` / trim field in its config record so a
-mis-mirrored leg can be corrected in software instead of requiring a
-reprint. This costs nothing when everything is assembled correctly and
-saves a rebuild when it isn't.
+Both legs rotate CCW for the same `+1°` command. That RM's foot happens to
+swing toward the front while LM's swings toward the rear is just where
+each leg already was in the rotation — not a sign inconsistency. (This is
+also why the translation test in the original pass showed opposite signs:
+asking both legs to swing toward the front is asking for *opposite*
+rotational senses, CCW for RM, CW for LM, given where each one starts. That
+was always going to produce opposite-signed commands, mirrored parts or
+not — it's not evidence either way, which is exactly the mistake.)
 
-Femur and tibia need no equivalent mirroring analysis: `l_forward` and `D`
-are built from `l_xy` (a vector magnitude, rotation-invariant) and `z`
-(never rotated), so beta and gamma come out identical regardless of which
-way the leg points. Only the coxa/yaw axis needed the rotation, and it's
-the only one that's had that logic applied. Consistent.
+**Why "always the same rotational sense" is exactly what a single-part
+design needs.** `origin.z = atan2(y, x)` and the `-origin.z` rotation
+`calculate_ik` applies are both **pure rotations** (determinant +1), never
+reflections (determinant −1), anywhere in this code. A pure rotation
+preserves handedness. If all six legs are the same rigid part, just yawed
+into place by a pure rotation, then "increasing the coxa servo command"
+drives the *same* absolute rotational sense on every leg by construction —
+which is precisely what the derivative above shows the code assumes. Code
+and hardware match.
+
+Had the legs instead been true mirror-image parts (a reflection, not a
+rotation, applied to one side), the servo-to-motion relationship would
+flip sign between L and R, and this uniform, rotation-only formula would
+have been wrong for one side — needing an explicit per-leg sign flip that
+appears nowhere in the source. **So the earlier conclusion had it
+backwards: it's the mirrored-parts case that would have needed per-leg
+sign inversion, and the single-part case — the one actually built — is
+exactly the case this uniform formula is correct for, with no inversion
+needed anywhere.**
+
+Femur and tibia don't need separate treatment, for the same reason as
+before, now on firmer ground: `l_forward` and `D` are built from `l_xy` (a
+vector magnitude, rotation-invariant) and `z` (never rotated), so beta and
+gamma come out identical regardless of mount angle. Since the whole leg —
+coxa, femur, and tibia together — is one rigid part carried along by a
+pure rotation, there's no chirality flip anywhere in the assembly for any
+of the three joints to compensate for.
+
+**What this changes about risk.** The architecture question is closed —
+there's no more "which of two valid hardware constructions did we build"
+uncertainty, and the uniform `90 + angle` treatment is correct as written,
+for all three joints, on all six legs. The remaining risk is narrower:
+plain assembly/calibration variance — a coxa horn seated one spline tooth
+off, a leg not perfectly square on its mount — which can happen to any
+single identical leg independent of any L/R question. **Recommendation
+(revised, see §7 for how this lands in the port):** keep the power-on,
+one-leg-at-a-time wave test — it's now clearly framed as an assembly-QA
+check, not a hedge against an architecture that turned out not to exist.
+Keep a per-leg trim field in the servo calibration record, but its default
+is now known: `0` (no correction) for all six legs, uniformly, since the
+uniform formula is confirmed correct — it exists purely to absorb bench-
+measured assembly variance on an individual leg, not to encode an L/R
+distinction that doesn't exist in this hardware.
 
 ## 4. Gait — correct as a tripod pattern, structurally limited beyond that
 

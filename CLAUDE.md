@@ -83,9 +83,11 @@ deliberately changed on port:
 **Kept as-is (verified correct):**
 - FK/IK math (`calculate_fk`/`calculate_ik`) — standard 3-DOF leg solve,
   reachability clamping on `D` before `acos`, correct
-- Leg-mirroring approach — the per-leg rotation by `-origin.z` provably
-  produces mirrored servo commands for mirrored legs (worked derivation in
-  `ANALYSIS.md` §3); ported as-is, not reworked
+- Uniform per-leg rotation by `-origin.z`, same formula on all six legs, no
+  per-leg sign flip — confirmed correct: all six legs are the same STL, no
+  mirrored L/R variant, and the rotation-only (never reflection) math is
+  exactly what a single-part, yawed-into-place leg needs (worked derivation
+  in `ANALYSIS.md` §3); ported as-is, not reworked
 - Tripod grouping by `legIndex % 2` — array order is consecutive around the
   physical ring, so this is the correct tripod pairing
 
@@ -105,8 +107,10 @@ deliberately changed on port:
 - No link-timeout failsafe → required for the WiFi replacement of NRF24,
   more urgent than it was for RC (`ANALYSIS.md` §5, §7)
 - Instant `write(90)` on boot, two unramped startup jumps → slow homing
-  ramp; optional one-leg-at-a-time wave test before gait is armed, to catch
-  a mis-mirrored or mis-calibrated leg on the bench instead of on the floor
+  ramp; optional one-leg-at-a-time wave test before gait is armed, as an
+  assembly-QA check (all six legs are the same part, so there's no L/R
+  question left — this only catches per-leg assembly/calibration variance,
+  e.g. a horn seated a spline tooth off) instead of finding it on the floor
 - `constrain()` only on the coxa angle → add explicit bounds on femur too
   (tibia's bound is provable, see above, but keep it explicit)
 - NRF24/RF24 radio stack — dropped entirely, replaced by the PC GUI over
