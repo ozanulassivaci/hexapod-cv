@@ -17,3 +17,8 @@ env/
 *.engine
 *.mp4
 *.avi
+
+# firmware (PlatformIO)
+firmware/.pio/
+firmware/.vscode/
+firmware/include/secrets.h
