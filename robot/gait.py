@@ -90,6 +90,19 @@ def is_in_stance(leg_index: int, phase: float) -> bool:
     return local_phase < 0.5
 
 
+def is_motion_idle(vx: float, vy: float, speed: float, rotation: float) -> bool:
+    """The idle condition foot_target() short-circuits on -- exposed so
+    firmware's bench-mode arm-refusal check ("refuse to arm bench_mode
+    while gait is actively non-idle") and this module share one
+    definition of "idle" (mirrored in firmware/lib/core/Gait.cpp's
+    isMotionIdle for the same reason)."""
+    speed_frac = max(0.0, min(100.0, speed)) / 100.0
+    if speed_frac <= 1e-9:
+        return True
+    magnitude = math.hypot(vx, vy)
+    return magnitude <= 1e-9 and abs(rotation) <= 1e-9
+
+
 def foot_target(
     leg_index: int,
     leg: Leg,
@@ -107,14 +120,13 @@ def foot_target(
     (WalkCommand/TurnCommand's own field). rotation in [-1, 1]."""
     home = home_position(leg, body_height)
 
+    if is_motion_idle(vx, vy, speed, rotation):
+        return home
+
     speed_frac = max(0.0, min(100.0, speed)) / 100.0
     magnitude = math.hypot(vx, vy)
     if magnitude > 1.0:
         vx, vy = vx / magnitude, vy / magnitude
-
-    idle = speed_frac <= 1e-9 or (magnitude <= 1e-9 and abs(rotation) <= 1e-9)
-    if idle:
-        return home
 
     local_phase = phase % 1.0
     if leg_index % 2 != 0:
