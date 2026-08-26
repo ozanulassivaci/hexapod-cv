@@ -1,4 +1,5 @@
 opencv-python==4.10.0.84
 numpy==1.26.4
 pytest==8.3.3
-pyyaml==6.0.2  # codegen tool only (scripts/gen_protocol_constants.py), not imported at runtime
+pyyaml==6.0.2
+PySide6==6.11.2
