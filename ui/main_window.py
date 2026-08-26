@@ -30,6 +30,7 @@ from transport.protocol import (
     TurnCommand,
     WalkCommand,
 )
+from ui.bench_tab import BenchTab
 from ui.calibration_tab import CalibrationTab
 from ui.control_panel import ControlPanel
 from ui.log_panel import LogPanel
@@ -92,6 +93,14 @@ class MainWindow(QMainWindow):
         self.video_panel = VideoPanel(config.ui.window_width, config.ui.window_height)
         self.control_panel = ControlPanel()
         self.calibration_tab = CalibrationTab(link)
+        self.bench_tab = BenchTab(
+            link,
+            dwell_timeout_s=config.bench.dwell_timeout_s,
+            nudge_step_us=config.bench.nudge_step_us,
+            default_sweep_min_us=config.bench.default_sweep_min_us,
+            default_sweep_max_us=config.bench.default_sweep_max_us,
+            default_sweep_duration_s=config.bench.default_sweep_duration_s,
+        )
         self.log_panel = LogPanel()
 
         self._build_layout()
@@ -116,6 +125,7 @@ class MainWindow(QMainWindow):
         tabs.setFocusPolicy(Qt.NoFocus)
         tabs.addTab(operate_tab, "Operate")
         tabs.addTab(self.calibration_tab, "Calibrate")
+        tabs.addTab(self.bench_tab, "Bench Test")
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -131,6 +141,7 @@ class MainWindow(QMainWindow):
         self.control_panel.mode_toggle_requested.connect(self._on_mode_toggle_requested)
         self.control_panel.estop_clicked.connect(self._on_estop)
         self.calibration_tab.log_message.connect(self.log_panel.log)
+        self.bench_tab.log_message.connect(self.log_panel.log)
 
     # --- keyboard: current intent lives here, not in a resend timer -------
 
@@ -201,6 +212,7 @@ class MainWindow(QMainWindow):
         self._active_turn_keys.clear()
         self._ensure_manual_mode()
         self._send_and_log(StopCommand(), source="ESTOP")
+        self.bench_tab.emergency_stop()
 
     # --- mode ------------------------------------------------------
 
@@ -265,6 +277,7 @@ class MainWindow(QMainWindow):
         self.control_panel.set_constants_warning(self.link.constants_warning)
         self.control_panel.set_telemetry(telemetry, self._last_rtt_ms)
         self.calibration_tab.tick(telemetry)
+        self.bench_tab.tick(telemetry)
 
     def _drive_auto_track(self, detections) -> None:
         has_target = bool(detections)
@@ -314,6 +327,7 @@ class MainWindow(QMainWindow):
         self.log_panel.log(f"[{source}] {command!r}")
 
     def closeEvent(self, event) -> None:
+        self.bench_tab.emergency_stop()  # don't leave a servo held away from neutral unattended
         self._tick_timer.stop()
         self.stream.stop()
         self.link.close()
