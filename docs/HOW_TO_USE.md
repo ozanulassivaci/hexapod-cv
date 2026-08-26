@@ -70,11 +70,12 @@ the network — reflashing over WiFi removes the servo-rail-off cycle for
 most updates, which is the entire reason it exists.
 
 1. Make sure nothing is armed — Calibrate and Bench Test tabs both showing
-   DISARMED — and no bench servo is currently being held away from
-   neutral. **OTA is refused in either of those states**, and refused
-   silently: the ESP32 simply won't respond to the update request at all,
-   there's no error message telling you why. If an OTA upload seems to
-   hang or fails to connect, this is the first thing to check.
+   DISARMED — no bench servo is currently being held away from neutral,
+   and the robot isn't actively walking (hit Space/STOP first if it is).
+   **OTA is refused in any of those states**, and refused silently: the
+   ESP32 simply won't respond to the update request at all, there's no
+   error message telling you why. If an OTA upload seems to hang or fails
+   to connect, this is the first thing to check.
 2. Servo rail can stay **ON** — this is a WiFi update, not USB, so the
    ground-path risk "the one rule that matters most" describes doesn't
    apply here.
@@ -146,6 +147,42 @@ servo rail — but the ESP32 itself talks to you over WiFi, same as always.
    it down last. If it shares power with the servo rail, this happens on
    its own in step 3.
 
+## Flipping ROBOT_ASSEMBLED, once the robot is actually standing on its own legs
+
+Firmware has two safe-state modes, chosen at compile time by
+`ROBOT_ASSEMBLED` in `firmware/include/Config.h` — not something you set
+at runtime from the GUI, and not sent over the wire. Default is `0`
+(bench mode): on a link timeout, an OTA start, or a WiFi AP-fallback
+transition, every servo releases. That's correct right now, and stays
+correct for as long as there's no leg bearing weight — releasing costs
+nothing when there's nothing to drop.
+
+Once assembly is actually finished — all six legs mounted, the robot
+standing on its own — releasing becomes the wrong answer: a loaded joint
+gives way under the robot's own weight the instant it's released.
+`ROBOT_ASSEMBLED 1` switches to holding the last commanded position
+instead — the control loop simply stops sending new pulses; the PCA9685
+keeps outputting whatever it was last told, with no further firmware
+involvement needed to "hold."
+
+1. Only do this once assembly is genuinely done and you've confirmed the
+   robot stands under its own commanded pose. Don't flip it "to test" on
+   a bench with no legs attached — see "Never do this" below for why.
+2. In `firmware/include/Config.h`, change `#define ROBOT_ASSEMBLED 0` to
+   `#define ROBOT_ASSEMBLED 1`.
+3. Reflash — OTA is fine (see Section 2a), same as any other firmware
+   change.
+4. After it reboots, confirm the flip actually took effect: the boot
+   line and the `status` serial command both print `safety_mode=`. If
+   you're not on USB for the reboot itself, connect once afterward to
+   check — the GUI has no equivalent readout for this, since it's a
+   build-time fact, not telemetry.
+5. From here on, a link timeout or OTA start mid-walk holds the pose
+   instead of dropping — expected, and the entire point of the flip. It
+   does not change bench-testing behavior: a single loose servo's dwell
+   timeout still releases that one channel on its own, independent of
+   this flag.
+
 ## Measuring PCA9685 oscillator frequency (once per board)
 
 Each PCA9685 board has its own internal oscillator, nominally 25MHz —
@@ -208,8 +245,15 @@ against the meter's reading, same ratio math.
   yourself first.
 - **Never assume OTA will work while anything is armed.** It's refused
   silently — no error, the ESP32 just won't respond — while Calibrate or
-  Bench Test mode is armed, or while any servo is being held away from
-  neutral. Disarm and park first; see Section 2a.
+  Bench Test mode is armed, while any servo is being held away from
+  neutral, or while the robot is actively walking. Disarm, park, and stop
+  first; see Section 2a.
+- **Never flip `ROBOT_ASSEMBLED` to test it on a bare bench servo.**
+  Once set, a link timeout holds the last commanded position instead of
+  releasing — harmless on an assembled, standing robot, but on a bench
+  rig it just means a bare servo keeps fighting to hold whatever pulse it
+  last had instead of going limp, for no benefit. Flip it once, for real,
+  when assembly is actually done — see "Flipping ROBOT_ASSEMBLED" above.
 - **Never click through an import confirmation without reading it.**
   It names the file and the count of entries about to be written. A
   confident "Yes" on the wrong file silently overwrites good calibration.

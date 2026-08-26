@@ -11,7 +11,14 @@ python app.py
 
 It works with no camera and no robot connected. That's normal, not broken.
 
-## The three tabs, in one paragraph each
+By default the app talks to `MockRobotLink` — a fake robot that
+acknowledges everything instantly but never actually moves or walks over
+time. Run `python app.py --link-mode sim` instead (or set `link.mode:
+sim` in `operator_config.yaml`) to drive the software simulator, which
+does run gait over time and shows it in a fourth **Simulator** tab — see
+below. Neither mode needs a camera, real servos, or an ESP32.
+
+## The tabs, in one paragraph each
 
 **Operate** is for driving the robot: camera view on the left, controls on
 the right, a log at the bottom. This is where you walk, turn, and use
@@ -28,8 +35,18 @@ no IK, just a direct pulse to that one channel. This is what you use
 *before* assembly: mounting horns, finding out if a servo is dead, finding
 its safe range of motion.
 
+**Simulator** (only shown when you launched with `--link-mode sim`) is a
+live top-down view of gait — body position/heading and which legs are
+currently planted vs. lifted — driven by the exact same WASD/Q/E/speed/
+body-height controls on the Operate tab. Not a physics simulation and not
+meant to look realistic; it exists to catch a gait bug (wrong tripod
+grouping, a joint that won't clamp, a command that does the wrong thing)
+before it ever reaches a real servo. See "Using the Simulator tab" below.
+
 If your servos just arrived and nothing is assembled yet, you want **Bench
 Test**. If the robot is built and you're tuning it, you want **Calibrate**.
+If you want to sanity-check gait logic itself — including the link
+failsafe — with no hardware at all, you want **Simulator**.
 
 ## Two concepts you need before any of this makes sense
 
@@ -165,6 +182,40 @@ autosave. Export before you close, every time, if the session mattered.
   from neutral for a while and shows a countdown to when the app will force
   it back to neutral on its own. This is the app actively working against
   you leaving a servo stalled — see below.
+
+## Using the Simulator tab
+
+There's nothing to configure on this tab — it's a view, not a set of
+controls. Everything driving it lives on the Operate tab.
+
+- **The circle in the middle** is the robot's body. Blue means the link
+  is up; gray means it's timed out (see below) — the same distinction the
+  Operate tab's LINK light shows, drawn a different way.
+- **The line from the circle** is heading — which way the body is
+  currently facing, from Q/E turning.
+- **The six dots** are feet. Green means that leg is currently planted
+  (stance); orange means it's lifted mid-swing. Watching these while
+  holding W is the actual point of this tab: at any moment exactly three
+  should be green and three orange, alternating — a tripod gait. If that
+  pattern looks wrong, something in the gait logic is wrong, and it's far
+  cheaper to notice it here than after servos are mounted.
+- **The `phase=` readout** top-left is the raw gait cycle position
+  (0.0–1.0, wrapping). Frozen means gait isn't advancing — either you're
+  not commanding any movement (idle is supposed to freeze it) or the link
+  has timed out (see below).
+
+- **"Simulate link drop" button**, above the view. Holding a key steady
+  does *not* trip the failsafe on its own — like a real robot connection,
+  the simulator keeps itself alive between your key presses automatically
+  (a heartbeat), the same way a real link does, so there's no ordinary
+  way to make it go quiet just by sitting still. This button is the
+  deliberate exception: it briefly suppresses that heartbeat so you can
+  actually watch the failsafe trip — the body turns gray, the status text
+  switches to "DISCONNECTED (failsafe — gait frozen)", and `phase=`
+  stops advancing, all while you keep holding a walk key. It recovers on
+  its own once the drop window ends. Real hardware has no equivalent live
+  control for this (short of physically interrupting WiFi) — it's
+  simulator-only, for exactly this purpose.
 
 ## Walkthrough: bench-testing a loose servo and parking it to mount a horn
 

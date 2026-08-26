@@ -173,13 +173,12 @@ Allowed over the same UDP link, with two guards beyond ordinary validation:
   to catch, defeated by the same mechanism meant to catch it. The window
   is refreshed only by genuine gated writes (`calibrate`/`write_offsets`),
   matching this section's wording above, which already said that and not
-  "refreshed by `calibration_mode`." The reference firmware implementation
-  (`firmware/`) does this correctly; **`MockRobotLink` (`transport/
-  mock_link.py`) currently does not** — it re-arms on every received
-  `armed=True`, resends included. This is a known, not-yet-fixed
-  discrepancy, out of scope for the firmware session that found it.
-  Fixing `MockRobotLink` to match is a real follow-up, not implied to be
-  done by this note.
+  "refreshed by `calibration_mode`." Both the firmware implementation
+  (`firmware/`) and `MockRobotLink` (`transport/mock_link.py`) implement
+  this correctly, pinned by tests in both `tests/test_mock_link.py` and
+  `firmware/test/test_arm_gate/` — this was a real, briefly-shipped
+  divergence between the two (mock re-armed on every received
+  `armed=True`, resends included), closed in a later session once found.
 
 Serial-only was the alternative, and was rejected for a hardware reason
 specific to this build: calibrating requires watching the servo move,
@@ -274,10 +273,15 @@ the window — only `bench_pulse`/`record_limit` do, for the identical
 reason.
 
 For real accident-proofing this needs to hold at the firmware level too:
-arming bench mode should suspend the gait control loop, not run alongside
-it. That can't be built without firmware, which is out of scope this
-session — noted here as a firmware TODO, not implied to already be
-enforced by anything built so far.
+arming bench mode suspends the gait control loop, not run alongside it.
+Built once gait existed (a later session than the one that first wrote
+this note): `bench_mode(armed=true)` is refused with `ok=false,
+error="gait active, cannot arm bench mode"` while a walk/turn command's
+velocity/rotation is non-idle, and — the other direction — the gait
+control loop itself does not tick at all while bench mode is armed, so
+the two can never command the same physical channel in the same tick
+regardless of ordering. `MockRobotLink` mirrors the arm-refusal for
+parity, since it has no gait loop of its own to also suspend.
 
 **Addressed by `(board, channel)`, not `servo_index`.** A loose servo
 being bench-tested hasn't been assigned a leg position yet — there is no
@@ -327,14 +331,27 @@ out-of-range command cannot be built, let alone sent.
 | `read_offsets` | — | returns the full servo profile table via `Telemetry.profiles`; always allowed, armed or not — reading isn't a write |
 | `write_offsets` | `offsets` (list of `{servo_index, offset_us, sign}`, 1-18 entries, no duplicate indices) | bulk restore of offset/sign only, never limits/note (§7); requires calibration mode armed |
 | `bench_mode` | `armed` (bool) | arms/disarms `bench_pulse`/`record_limit`; independent of `calibration_mode` (§8) |
-| `bench_pulse` | `board` (int), `channel` (int), `pulse_us` (int) | `board ∈ {0x40, 0x41}`, `channel ∈ [0, 15]`, `pulse_us ∈ [500, 2500]`; requires bench mode armed |
+| `bench_pulse` | `board` (int), `channel` (int), `pulse_us` (int), `servo_index` (int, optional) | `board ∈ {0x40, 0x41}`, `channel ∈ [0, 15]`, `pulse_us ∈ [500, 2500]`, `servo_index ∈ [0, 17]` if given; requires bench mode armed |
 | `record_limit` | `servo_index` (int), `bound` (`"min"`/`"max"`), `pulse_us` (int) | `servo_index ∈ [0, 17]`, `pulse_us ∈ [500, 2500]`; requires bench mode armed; rejected if it would make `min_pulse_us >= max_pulse_us` for that servo |
 | `bench_health_note` | `servo_index` (int), `note` (str) | `servo_index ∈ [0, 17]`, `note` ≤ 500 chars; not gated |
 | `ping` | — | — |
 
 `walk` carries both `vx` and `vy` from the start, even though the reference
 gait has no strafing today (`ANALYSIS.md` §4) — the protocol should not be
-what blocks adding it.
+what blocks adding it. Firmware's gait engine now implements both axes,
+plus continuous speed scaling and runtime body height — see the
+"Deliverables status" section below for what's real as of which session.
+
+**On `bench_pulse`'s optional `servo_index`**: found missing while
+implementing firmware — `GatedServoDriver` needs a servo identity to look
+up a bench-recorded limit against, but `board`/`channel` alone doesn't
+give it one (a loose servo hasn't necessarily been assigned a leg
+position yet, per this section's note above). When given, the receiver
+enforces that servo's recorded `min_pulse_us`/`max_pulse_us` (if any)
+against the pulse, exactly like a `record_limit`-recorded bound always
+works; when omitted, only the generic envelope bound applies. Both
+firmware and `MockRobotLink` implement this identically (`transport/
+mock_link.py`).
 
 **On `calibrate`'s two fields**: `offset_us` is a per-servo pulse trim
 (microsecond correction around center), and `sign` is a per-servo rotation
@@ -358,7 +375,14 @@ specific unit.
   sequence-freshness and validation.
 - If that exceeds `LINK_TIMEOUT_S` with no fresh packet, the robot forces
   `stop` and sets the `LINK_TIMEOUT` fault bit, independent of whatever the
-  last-applied command was.
+  last-applied command was. What "stop" concretely means depends on
+  firmware's `ROBOT_ASSEMBLED` build flag (a compile-time choice, not a
+  wire concept — see `docs/HOW_TO_USE.md`): `Bench` (the default) releases
+  every servo; `Assembled` holds the last commanded position by simply not
+  computing or sending any new one, since a loaded joint being released
+  gives way under the robot's own weight. Both mean "no further commanded
+  motion" from the protocol's point of view; only the physical result at
+  the servo differs.
 - Recovery is automatic: the next valid, newer packet clears the fault bit
   and resumes normal operation. There is no separate "re-arm" step.
 - The PC-side link implementation applies the same freshness/newness rule
@@ -385,18 +409,28 @@ handling, UDP heartbeat timing and telemetry receipt, `MockRobotLink`
 behavior including both arm gates and the limit/note merge-preservation
 guarantee, and the bench dwell-guard/sweep pure logic.
 
-Firmware (`firmware/`, ESP32-S3/PlatformIO) implements this protocol for
-the bench-testing subset: `bench_mode`/`bench_pulse`/`record_limit`/
-`bench_health_note`, `calibration_mode`/`calibrate`/`write_offsets`/
-`read_offsets` (storage only — no gait/IK yet to act on a calibrated
-value), `ping`, and decodes-but-doesn't-act-on `walk`/`turn`/`stop`/
-`body_height`/`pan_tilt`/`face` (acknowledged, recorded for
-`last_applied`, no hardware effect — there is no gait/IK yet). The link
-watchdog, both arm gates, per-channel dwell protection, and limit
-enforcement (`GatedServoDriver`, the only path any firmware code may use
-to command a pulse) are all pure logic in `firmware/lib/core`, unit
-tested on the host (`pio test -e native`) the same way
-`transport/protocol.py` is tested with pytest. Not yet built: anything
-gait/IK-related, since nothing is assembled yet (`CLAUDE.md`). Verified by real cross-compilation for the actual target
-and by unit tests; not verified against physical hardware, which no
-session so far has had access to.
+Firmware (`firmware/`, ESP32-S3/PlatformIO) implements the full protocol:
+`bench_mode`/`bench_pulse`/`record_limit`/`bench_health_note`,
+`calibration_mode`/`calibrate`/`write_offsets`/`read_offsets`,
+`ping`, and — as of a later session than the one that first wrote most of
+this document — real gait/IK for `walk`/`turn`/`body_height`, converted
+through `Kinematics` → `AngleToPulse` → `GatedServoDriver` (the same
+limit enforcement `bench_pulse` goes through, no separate/bypassable
+path). `pan_tilt`/`face` are still decoded, validated, and recorded for
+`last_applied` with no hardware effect — no pan-tilt or face hardware
+exists yet. The link watchdog, both arm gates, per-channel dwell
+protection, limit enforcement, kinematics, and the gait engine are all
+pure logic in `firmware/lib/core`, unit tested on the host (`pio test -e
+native`) the same way `transport/protocol.py` is tested with pytest, and
+the kinematics/gait math specifically is cross-checked against
+`robot/kinematics.py`/`robot/gait.py` (the Python reference
+implementation) via generated golden fixtures
+(`scripts/gen_kinematics_golden.py`, `scripts/gen_gait_golden.py`) rather
+than shared via a compiled extension — see `reference/ANALYSIS.md`
+Section 7 for why. A `simulator/` package (`SimRobotLink`, a `RobotLink`
+implementation) runs the same gait engine over time on a background
+thread, for GUI-driven testing of gait/failsafe behavior with no hardware
+and no camera, selectable via `operator_config.yaml`'s `link.mode: sim`
+or `python app.py --link-mode sim`. Verified by real cross-compilation
+for the actual target and by unit tests; not verified against physical
+hardware, which no session so far has had access to.
