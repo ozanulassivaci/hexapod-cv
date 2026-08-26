@@ -50,6 +50,17 @@
 #define BENCH_PULSE_MAX_US 2500
 #define HEALTH_NOTE_MAX_LEN 500
 
+// AngleToPulse's neutral pulse for the tibia joint specifically. Coxa and
+// femur are bipolar around NEUTRAL_PULSE_US (servo command 90 = straight
+// leg's servo-degree neutral); the tibia horn is mounted such that 0, not
+// 90, is straight (ANALYSIS.md Section 2's undocumented hardware
+// coupling -- there is no way to verify or correct this in software).
+// PLACEHOLDER -- assumes the tibia's 0-degree servo command lands at the
+// nominal envelope minimum. MEASURE ME once assembled: command the tibia
+// to visually-straight-leg and record the pulse a servo tester shows,
+// same procedure as the oscillator frequency measurement.
+#define TIBIA_NEUTRAL_PULSE_US BENCH_PULSE_MIN_US
+
 // Fault flag bits, mirrors transport/protocol.py's FAULT_* constants.
 // Only LINK_TIMEOUT is ever set by this build; the others are reserved so
 // the wire format doesn't change when real fault sources exist later.
