@@ -44,6 +44,22 @@ class UIConfig:
 
 
 @dataclass
+class BenchConfig:
+    """Tunables for the Bench Test tab. neutral_pulse_us is deliberately
+    not here -- it's transport.protocol.NEUTRAL_PULSE_US, a wire-level
+    convention, not an operator preference. dwell_timeout_s must stay well
+    under BENCH_ARM_TIMEOUT_S (transport/constants.yaml) or bench mode can
+    auto-disarm before the dwell guard ever fires -- BenchTab warns at
+    construction if that's violated."""
+
+    dwell_timeout_s: float = 8.0
+    nudge_step_us: int = 10
+    default_sweep_min_us: int = 1400
+    default_sweep_max_us: int = 1600
+    default_sweep_duration_s: float = 4.0
+
+
+@dataclass
 class OperatorConfig:
     stream: StreamConfig = field(default_factory=StreamConfig)
     detection: DetectionConfig = field(default_factory=DetectionConfig)
@@ -52,6 +68,7 @@ class OperatorConfig:
         default_factory=lambda: TrackerConfig(dead_zone=0.1, turn_gain=0.8, turn_speed=30.0)
     )
     ui: UIConfig = field(default_factory=UIConfig)
+    bench: BenchConfig = field(default_factory=BenchConfig)
 
 
 def _stream_from_dict(data: dict) -> StreamConfig:
@@ -106,6 +123,19 @@ def _ui_from_dict(data: dict) -> UIConfig:
     )
 
 
+def _bench_from_dict(data: dict) -> BenchConfig:
+    defaults = BenchConfig()
+    return BenchConfig(
+        dwell_timeout_s=data.get("dwell_timeout_s", defaults.dwell_timeout_s),
+        nudge_step_us=data.get("nudge_step_us", defaults.nudge_step_us),
+        default_sweep_min_us=data.get("default_sweep_min_us", defaults.default_sweep_min_us),
+        default_sweep_max_us=data.get("default_sweep_max_us", defaults.default_sweep_max_us),
+        default_sweep_duration_s=data.get(
+            "default_sweep_duration_s", defaults.default_sweep_duration_s
+        ),
+    )
+
+
 def load_operator_config(path: str = DEFAULT_CONFIG_PATH) -> OperatorConfig:
     try:
         with open(path) as f:
@@ -119,4 +149,5 @@ def load_operator_config(path: str = DEFAULT_CONFIG_PATH) -> OperatorConfig:
         link=_link_from_dict(raw.get("link", {})),
         tracker=_tracker_from_dict(raw.get("tracker", {})),
         ui=_ui_from_dict(raw.get("ui", {})),
+        bench=_bench_from_dict(raw.get("bench", {})),
     )

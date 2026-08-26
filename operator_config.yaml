@@ -32,3 +32,14 @@ ui:
   tick_interval_s: 0.033
   window_width: 640
   window_height: 480
+
+# Bench Test tab. dwell_timeout_s must stay well under bench_arm_timeout_s
+# (transport/constants.yaml) or bench mode can auto-disarm while a servo
+# is held away from neutral, before the dwell guard ever gets to fire --
+# app.py's BenchTab warns at startup if this is violated.
+bench:
+  dwell_timeout_s: 8.0
+  nudge_step_us: 10
+  default_sweep_min_us: 1400
+  default_sweep_max_us: 1600
+  default_sweep_duration_s: 4.0
