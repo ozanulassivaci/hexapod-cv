@@ -50,6 +50,14 @@
 #define BENCH_PULSE_MAX_US 2500
 #define HEALTH_NOTE_MAX_LEN 500
 
+// Fault flag bits, mirrors transport/protocol.py's FAULT_* constants.
+// Only LINK_TIMEOUT is ever set by this build; the others are reserved so
+// the wire format doesn't change when real fault sources exist later.
+#define FAULT_LINK_TIMEOUT_BIT (1u << 0)
+#define FAULT_ESTOP_BIT (1u << 1)
+#define FAULT_SERVO_FAULT_BIT (1u << 2)
+#define FAULT_BROWNOUT_BIT (1u << 3)
+
 // --- Networking ---------------------------------------------------------
 
 #define ROBOT_UDP_PORT 9000  // matches operator_config.yaml's link.udp.robot_port

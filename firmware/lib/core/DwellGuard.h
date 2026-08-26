@@ -39,6 +39,13 @@ public:
     // ticking against stale state.
     void reset(uint8_t board, uint8_t channel);
 
+    // Whether this channel is currently tracked as away from neutral, as
+    // of the last observe() call -- used by the OTA gate (docs/protocol.md
+    // Section 8: OTA refused while any servo is commanded away from
+    // neutral) without needing a second, separately-maintained tracking
+    // array.
+    bool isAway(uint8_t board, uint8_t channel) const;
+
 private:
     static int indexFor(uint8_t board, uint8_t channel);
 

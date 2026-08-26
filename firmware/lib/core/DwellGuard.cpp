@@ -37,3 +37,9 @@ void DwellGuard::reset(uint8_t board, uint8_t channel) {
     if (i < 0 || i >= static_cast<int>(2 * PCA9685_CHANNELS_PER_BOARD)) return;
     awaySet_[i] = false;
 }
+
+bool DwellGuard::isAway(uint8_t board, uint8_t channel) const {
+    int i = indexFor(board, channel);
+    if (i < 0 || i >= static_cast<int>(2 * PCA9685_CHANNELS_PER_BOARD)) return false;
+    return awaySet_[i];
+}
