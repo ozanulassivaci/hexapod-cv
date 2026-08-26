@@ -7,6 +7,7 @@ from transport.protocol import (
     BenchHealthNoteCommand,
     BenchModeCommand,
     BenchPulseCommand,
+    BodyHeightCommand,
     CalibrateCommand,
     CalibrationModeCommand,
     FAULT_LINK_TIMEOUT,
@@ -16,6 +17,7 @@ from transport.protocol import (
     RecordLimitCommand,
     ServoProfile,
     StopCommand,
+    TurnCommand,
     WalkCommand,
     WriteOffsetsCommand,
 )
@@ -187,6 +189,52 @@ def test_write_offsets_rejected_when_not_armed():
     telemetry = link.latest_telemetry()
     assert telemetry.ok is False
     assert telemetry.error == "calibration not armed"
+
+
+# --- bench/gait mutual exclusion ----------------------------------------
+
+
+def test_bench_mode_refuses_to_arm_while_walk_active():
+    link = MockRobotLink()
+    link.send(WalkCommand(vx=1.0, vy=0.0, speed=50))
+    link.send(BenchModeCommand(armed=True))
+    telemetry = link.latest_telemetry()
+    assert telemetry.ok is False
+    assert telemetry.error == "gait active, cannot arm bench mode"
+    assert telemetry.bench_armed is False
+
+
+def test_bench_mode_refuses_to_arm_while_turn_active():
+    link = MockRobotLink()
+    link.send(TurnCommand(rate=0.5, speed=30))
+    link.send(BenchModeCommand(armed=True))
+    telemetry = link.latest_telemetry()
+    assert telemetry.ok is False
+    assert telemetry.bench_armed is False
+
+
+def test_bench_mode_arms_when_walk_speed_is_zero():
+    link = MockRobotLink()
+    link.send(WalkCommand(vx=1.0, vy=0.0, speed=0))  # speed 0 -- idle regardless of vx/vy
+    link.send(BenchModeCommand(armed=True))
+    assert link.latest_telemetry().bench_armed is True
+
+
+def test_bench_mode_arms_after_stop():
+    link = MockRobotLink()
+    link.send(WalkCommand(vx=1.0, vy=0.0, speed=50))
+    link.send(StopCommand())
+    link.send(BenchModeCommand(armed=True))
+    assert link.latest_telemetry().bench_armed is True
+
+
+def test_body_height_does_not_count_as_gait_active():
+    """A body_height command alone (no walk/turn) touches no gait axis --
+    must not itself block arming bench mode."""
+    link = MockRobotLink()
+    link.send(BodyHeightCommand(height=80.0))
+    link.send(BenchModeCommand(armed=True))
+    assert link.latest_telemetry().bench_armed is True
 
 
 # --- bench mode --------------------------------------------------------

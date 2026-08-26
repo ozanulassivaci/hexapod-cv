@@ -1,8 +1,10 @@
 """MockRobotLink: no networking, no hardware. Records every command sent
 and synthesizes a plausible telemetry reply synchronously, including a
 simulation of both arm/disarm gates -- calibration_mode (docs/protocol.md
-Section 6) and bench_mode (Section 8) -- so GUI development against either
-workflow doesn't have to wait for firmware.
+Section 6) and bench_mode (Section 8), edge-triggered exactly like
+firmware's ArmGate, and bench_mode's refusal to arm while gait would be
+active (Section 8) -- so GUI development against either workflow doesn't
+have to wait for firmware.
 
 Meant to be lived with for weeks while parts ship -- inspectable state
 (`sent_commands`, `last_command`), optional console logging, and a couple
@@ -13,6 +15,7 @@ through a fault condition.
 import dataclasses
 import time
 
+from robot.gait import is_motion_idle
 from transport.generated_constants import (
     BENCH_ARM_TIMEOUT_S,
     CALIBRATION_ARM_TIMEOUT_S,
@@ -71,6 +74,18 @@ class MockRobotLink(RobotLink):
         self._bench_arm_timeout_s = bench_arm_timeout_s
         self._seq = 0
         self._last_motion_command: Command = StopCommand()
+        # Separate from _last_motion_command (a plain last-command echo
+        # for last_applied) -- tracked per axis, updated only by the
+        # command type that carries it, so the bench-mode arm-refusal
+        # check below can ask "is gait currently non-idle" without the
+        # same bug a single most-recent-command read would have (a
+        # body_height command has no vx/vy/rate at all -- see
+        # simulator/sim_link.py's docstring and the firmware fix it
+        # mirrors for the full story).
+        self._current_vx = 0.0
+        self._current_vy = 0.0
+        self._current_speed = 0.0
+        self._current_rotation = 0.0
         self._profiles: dict[int, ServoProfile] = {
             i: ServoProfile(i, 0, 1, None, None, "") for i in range(SERVO_COUNT)
         }
@@ -131,6 +146,15 @@ class MockRobotLink(RobotLink):
 
         if isinstance(command, _MOTION_TYPES):
             self._last_motion_command = command
+            if isinstance(command, WalkCommand):
+                self._current_vx, self._current_vy, self._current_speed = command.vx, command.vy, command.speed
+                self._current_rotation = 0.0
+            elif isinstance(command, TurnCommand):
+                self._current_vx, self._current_vy = 0.0, 0.0
+                self._current_speed, self._current_rotation = command.speed, command.rate
+            elif isinstance(command, StopCommand):
+                self._current_vx = self._current_vy = self._current_speed = self._current_rotation = 0.0
+            # BodyHeightCommand/PanTiltCommand/FaceCommand don't touch any gait axis.
             return True, None, None
 
         if isinstance(command, PingCommand):
@@ -181,9 +205,18 @@ class MockRobotLink(RobotLink):
 
         if isinstance(command, BenchModeCommand):
             if command.armed:
-                # Same edge-only reasoning as calibration_mode above.
                 if not bench_armed:
-                    self._bench_armed_until = now + self._bench_arm_timeout_s
+                    # docs/protocol.md Section 8's pre-announced TODO:
+                    # bench mode and gait must be mutually exclusive,
+                    # mirroring firmware's identical refusal (this mock
+                    # has no gait engine to also "freeze", but arming
+                    # while gait would be active is the same operator
+                    # mistake either way).
+                    if not is_motion_idle(
+                        self._current_vx, self._current_vy, self._current_speed, self._current_rotation
+                    ):
+                        return False, "gait active, cannot arm bench mode", None
+                    self._bench_armed_until = now + self._bench_arm_timeout_s  # same edge-only reasoning as calibration_mode
             else:
                 self._bench_armed_until = None
             return True, None, None
