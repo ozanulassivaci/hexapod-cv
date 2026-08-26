@@ -139,6 +139,40 @@ def test_holding_a_key_past_link_timeout_does_not_freeze_gait():
     link.close()
 
 
+def test_simulate_link_drop_trips_the_failsafe_despite_heartbeat():
+    """The debug affordance behind the Simulator tab's "Simulate link
+    drop" button: with the heartbeat on (default, matching production),
+    a drop must still be observable -- gait freezes and connected goes
+    False -- proving the heartbeat doesn't unconditionally mask timeouts."""
+    link = SimRobotLink(connection_timeout_s=0.15)
+    link.send(WalkCommand(vx=1.0, vy=0.0, speed=80))
+    time.sleep(_SETTLE_S)
+    assert link.snapshot().connected is True
+
+    link.simulate_link_drop(1.0)
+    time.sleep(0.3)  # past connection_timeout_s, heartbeat suppressed by the drop
+    snap = link.snapshot()
+    assert snap.connected is False
+    phase_during_drop = snap.gait_phase
+    time.sleep(_SETTLE_S)
+    assert link.snapshot().gait_phase == pytest.approx(phase_during_drop, abs=1e-9)
+    link.close()
+
+
+def test_link_recovers_after_drop_window_ends():
+    link = SimRobotLink(connection_timeout_s=0.15)
+    link.send(WalkCommand(vx=1.0, vy=0.0, speed=80))
+    time.sleep(_SETTLE_S)
+
+    link.simulate_link_drop(0.3)
+    time.sleep(0.2)  # past connection_timeout_s, still well inside the 0.3s drop window
+    assert link.snapshot().connected is False
+
+    time.sleep(0.3)  # past the drop window, plus room for the next heartbeat tick to refresh
+    assert link.snapshot().connected is True
+    link.close()
+
+
 def test_bench_mode_freezes_gait():
     link = SimRobotLink()
     link.send(BenchModeCommand(armed=True))  # idle at this point -- allowed to arm

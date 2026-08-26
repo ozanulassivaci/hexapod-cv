@@ -8,14 +8,14 @@ they reach real servos, not to look like a real robot.
 No internal QTimer -- tick() is called from MainWindow's existing central
 tick (the same "one timer drives every tab" pattern
 CalibrationTab.tick()/BenchTab.tick() already use), it just triggers a
-repaint; paintEvent() pulls a fresh snapshot itself.
+repaint; the canvas's paintEvent() pulls a fresh snapshot itself.
 """
 
 import math
 
 from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen
-from PySide6.QtWidgets import QWidget
 
 from simulator.sim_link import SimRobotLink
 
@@ -26,14 +26,55 @@ _STANCE_COLOR = QColor(60, 180, 75)
 _SWING_COLOR = QColor(235, 160, 30)
 _LEG_LINE_COLOR = QColor(90, 90, 90)
 _TEXT_COLOR = QColor(230, 230, 230)
+_NOTE_STYLE = "color: #9e9e9e; font-style: italic;"
 
 _BODY_RADIUS_PX = 22.0
 _FOOT_RADIUS_PX = 7.0
 _HEADING_ARROW_MM = 120.0
 _WORLD_SPAN_MM = 900.0  # roughly how much world (mm) fits across the shorter widget dimension
+_LINK_DROP_DURATION_S = 3.0  # long enough to comfortably watch the failsafe trip and recover
 
 
 class SimView(QWidget):
+    """Container: a control row (the link-drop button) plus the drawing
+    canvas below it. Split into two widgets rather than one so the
+    canvas's paintEvent only ever needs to fill its own rect, not reason
+    about a button sharing the same widget."""
+
+    def __init__(self, link: SimRobotLink, parent=None) -> None:
+        super().__init__(parent)
+        self.link = link
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self._build_control_row())
+        self._canvas = _SimCanvas(link)
+        layout.addWidget(self._canvas, 1)
+
+    def _build_control_row(self) -> QWidget:
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+
+        button = QPushButton(f"Simulate link drop ({_LINK_DROP_DURATION_S:.0f}s)")
+        button.setFocusPolicy(Qt.NoFocus)
+        button.clicked.connect(lambda: self.link.simulate_link_drop(_LINK_DROP_DURATION_S))
+        row_layout.addWidget(button)
+
+        note = QLabel(
+            "Simulator only -- real hardware has no equivalent live control. "
+            "Suppresses the heartbeat so the link-timeout failsafe actually trips, visibly."
+        )
+        note.setStyleSheet(_NOTE_STYLE)
+        note.setWordWrap(True)
+        row_layout.addWidget(note, 1)
+
+        return row
+
+    def tick(self) -> None:
+        self._canvas.tick()
+
+
+class _SimCanvas(QWidget):
     def __init__(self, link: SimRobotLink, parent=None) -> None:
         super().__init__(parent)
         self.link = link

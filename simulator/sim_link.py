@@ -34,6 +34,16 @@ carries it -- deliberately not read from MockRobotLink's last_applied
 to whatever a never-sent field defaults to on the very next resent walk
 packet. This mirrors a real bug caught and fixed in
 firmware/src/main.cpp; see that fix's commit message for the full story.
+
+With the heartbeat always on (the correct default -- see above), there is
+no organic way for a live GUI session to ever observe the failsafe trip:
+holding, releasing, or idling on a key never stops the heartbeat, exactly
+like a real UDPRobotLink session. simulate_link_drop() is the deliberate,
+explicit escape hatch behind the Simulator tab's "Simulate link drop"
+button -- it does not exist on real hardware (there is no live control
+for "briefly unplug the WiFi"), it is simulator-only, for actually
+watching the failsafe happen instead of only exercising it in
+tests/test_sim_link.py.
 """
 
 import dataclasses
@@ -75,6 +85,7 @@ class SimRobotLink(RobotLink):
         self._current_rotation = 0.0
         self._current_body_height = DEFAULT_BODY_HEIGHT
         self._last_command_at: float | None = None  # None = never sent, mirrors LinkWatchdog::hasEverReceivedPacket
+        self._drop_until: float | None = None  # set by simulate_link_drop()
 
         self._heartbeat_interval_s = heartbeat_interval_s
         self._tick_interval_s = 1.0 / tick_hz
@@ -97,7 +108,9 @@ class SimRobotLink(RobotLink):
             raise RuntimeError("send() called after close()")
 
         with self._gait_lock:
-            self._last_command_at = time.monotonic()
+            dropped = self._drop_until is not None and time.monotonic() < self._drop_until
+            if not dropped:
+                self._last_command_at = time.monotonic()
             if isinstance(command, WalkCommand):
                 self._current_vx, self._current_vy, self._current_speed = command.vx, command.vy, command.speed
                 self._current_rotation = 0.0
@@ -111,7 +124,8 @@ class SimRobotLink(RobotLink):
             # PanTilt/Face/calibration/bench commands don't touch any gait axis.
 
         seq = self._mock.send(command)
-        self._record_telemetry(self._augment(self._mock.latest_telemetry()))
+        if not dropped:
+            self._record_telemetry(self._augment(self._mock.latest_telemetry()))
         return seq
 
     def close(self) -> None:
@@ -126,6 +140,16 @@ class SimRobotLink(RobotLink):
         """What sim_view.py polls -- a full, safe-to-read-from-any-thread
         picture of body pose, gait phase, and per-leg stance/swing."""
         return self.state.snapshot(connected=self.is_connected)
+
+    def simulate_link_drop(self, duration_s: float) -> None:
+        """Suppresses the heartbeat -- and any send() calls that happen to
+        land during the window -- from refreshing the connection's
+        freshness clock, for duration_s seconds. See the module docstring
+        for why this exists: with the heartbeat always on, there is no
+        other way for a live session to observe the failsafe actually
+        trip."""
+        with self._gait_lock:
+            self._drop_until = time.monotonic() + duration_s
 
     # --- background stepping ---------------------------------------------
 
@@ -163,8 +187,11 @@ class SimRobotLink(RobotLink):
         have refreshed on both ends."""
         while not self._stop_event.wait(self._heartbeat_interval_s):
             with self._gait_lock:
-                self._last_command_at = time.monotonic()
-            self._record_telemetry(self._augment(self._mock.latest_telemetry()))
+                dropped = self._drop_until is not None and time.monotonic() < self._drop_until
+                if not dropped:
+                    self._last_command_at = time.monotonic()
+            if not dropped:
+                self._record_telemetry(self._augment(self._mock.latest_telemetry()))
 
     def _augment(self, mock_telemetry: Telemetry) -> Telemetry:
         """MockRobotLink's telemetry, with gait_phase populated for real
