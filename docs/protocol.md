@@ -162,6 +162,25 @@ Allowed over the same UDP link, with two guards beyond ordinary validation:
   kicked out mid-session while idling between servos still auto-disarms
   it if the operator walks away or the GUI crashes.
 
+  **Clarification found while implementing firmware:** `calibration_mode`
+  itself must arm only on the false→true transition, and must NOT refresh
+  the window on every receipt. The transport resends whatever was last
+  sent regardless of type (§2), so a resent `calibration_mode(armed=true)`
+  is indistinguishable on the wire from a deliberate re-arm click. If
+  receiving it (including resends) refreshed the window, arming and then
+  doing nothing else would keep the gate open forever as long as the link
+  stayed up — exactly the "operator walked away" case this timeout exists
+  to catch, defeated by the same mechanism meant to catch it. The window
+  is refreshed only by genuine gated writes (`calibrate`/`write_offsets`),
+  matching this section's wording above, which already said that and not
+  "refreshed by `calibration_mode`." The reference firmware implementation
+  (`firmware/`) does this correctly; **`MockRobotLink` (`transport/
+  mock_link.py`) currently does not** — it re-arms on every received
+  `armed=True`, resends included. This is a known, not-yet-fixed
+  discrepancy, out of scope for the firmware session that found it.
+  Fixing `MockRobotLink` to match is a real follow-up, not implied to be
+  done by this note.
+
 Serial-only was the alternative, and was rejected for a hardware reason
 specific to this build: calibrating requires watching the servo move,
 which means the servo rail must be live, and USB + servo rail live
@@ -249,7 +268,10 @@ calibration writes and arming raw pulse control are never the same click.
 Same auto-disarm-on-inactivity shape as `calibration_mode`
 (`BENCH_ARM_TIMEOUT_S`, refreshed by bench-related traffic while armed),
 but tracked entirely independently — arming one never arms or extends the
-other.
+other. Same edge-only arming rule too (§6's clarification): `bench_mode`
+arms only on the false→true transition and is never itself what refreshes
+the window — only `bench_pulse`/`record_limit` do, for the identical
+reason.
 
 For real accident-proofing this needs to hold at the firmware level too:
 arming bench mode should suspend the gait control loop, not run alongside
@@ -363,6 +385,18 @@ handling, UDP heartbeat timing and telemetry receipt, `MockRobotLink`
 behavior including both arm gates and the limit/note merge-preservation
 guarantee, and the bench dwell-guard/sweep pure logic.
 
-No firmware has been written in any session — the protocol, GUI, and
-`MockRobotLink` are all built and tested, but nothing has run against a
-real servo yet.
+Firmware (`firmware/`, ESP32-S3/PlatformIO) implements this protocol for
+the bench-testing subset: `bench_mode`/`bench_pulse`/`record_limit`/
+`bench_health_note`, `calibration_mode`/`calibrate`/`write_offsets`/
+`read_offsets` (storage only — no gait/IK yet to act on a calibrated
+value), `ping`, and decodes-but-doesn't-act-on `walk`/`turn`/`stop`/
+`body_height`/`pan_tilt`/`face` (acknowledged, recorded for
+`last_applied`, no hardware effect — there is no gait/IK yet). The link
+watchdog, both arm gates, per-channel dwell protection, and limit
+enforcement (`GatedServoDriver`, the only path any firmware code may use
+to command a pulse) are all pure logic in `firmware/lib/core`, unit
+tested on the host (`pio test -e native`) the same way
+`transport/protocol.py` is tested with pytest. Not yet built: anything
+gait/IK-related, since nothing is assembled yet (`CLAUDE.md`). Verified by real cross-compilation for the actual target
+and by unit tests; not verified against physical hardware, which no
+session so far has had access to.
