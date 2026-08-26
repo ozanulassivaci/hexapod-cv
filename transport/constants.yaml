@@ -1,0 +1,18 @@
+# Source of truth for constants shared between the PC transport layer and
+# the (future) ESP32-S3 firmware. Regenerate transport/generated_constants.py
+# after editing this file:
+#
+#   make gen-protocol
+#
+# This is a manual step, not a build hook -- see docs/protocol.md Section 5
+# for why. Because it's manual, it can be forgotten; the runtime cross-check
+# in transport/link.py (RobotLink.constants_warning) is what actually
+# catches drift, by comparing link_timeout_s against the value the robot
+# reports in its own telemetry at connect time. This file being current is
+# a convenience, not the safety property.
+
+protocol_version: 1
+sequence_bits: 32
+link_timeout_s: 1.0
+heartbeat_interval_s: 0.1
+calibration_arm_timeout_s: 30.0
