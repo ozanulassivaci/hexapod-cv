@@ -1,0 +1,34 @@
+#include "GatedServoDriver.h"
+
+#include "Config.h"
+
+GatedServoDriver::GatedServoDriver(ServoOutput& output, ServoProfileStore& profiles)
+    : output_(output), profiles_(profiles) {}
+
+bool GatedServoDriver::commandPulse(uint8_t board, uint8_t channel, uint16_t pulseUs,
+                                     bool hasServoIndex, uint8_t servoIndex, const char** reason) {
+    if (hasServoIndex) {
+        ServoProfile profile = profiles_.get(servoIndex);
+        if (profile.hasMinPulse && pulseUs < profile.minPulseUs) {
+            *reason = "pulse below recorded min for this servo";
+            return false;
+        }
+        if (profile.hasMaxPulse && pulseUs > profile.maxPulseUs) {
+            *reason = "pulse above recorded max for this servo";
+            return false;
+        }
+    }
+    output_.setPulse(board, channel, pulseUs);
+    return true;
+}
+
+void GatedServoDriver::release(uint8_t board, uint8_t channel) {
+    output_.release(board, channel);
+}
+
+void GatedServoDriver::releaseAll() {
+    for (uint8_t ch = 0; ch < PCA9685_CHANNELS_PER_BOARD; ++ch) {
+        output_.release(PCA9685_ADDR_BOARD_A, ch);
+        output_.release(PCA9685_ADDR_BOARD_B, ch);
+    }
+}
