@@ -13,6 +13,20 @@ actually advances over time, and a link-timeout that actually freezes it
 which is exactly what's needed to make "stop sending and watch the
 failsafe" observable.
 
+Also runs its own heartbeat thread, exactly mirroring UDPRobotLink's
+_heartbeat_loop: MainWindow only calls send() on a key *transition*
+("current intent lives here, not in a resend timer" -- see that class's
+keyPressEvent), relying entirely on the transport to keep re-affirming
+that intent while a key is held. Without an equivalent here, holding a
+key for longer than LINK_TIMEOUT_S would spuriously freeze gait and drop
+is_connected mid-hold -- a real bug this module shipped with initially,
+caught by an actual GUI smoke test (grabbing screenshots while
+programmatically holding 'w'), not by unit tests alone, since nothing in
+tests/test_sim_link.py drives it through MainWindow's real key-hold
+pattern. heartbeat_interval_s=None disables it, for tests that want to
+observe the raw timeout mechanism directly without the heartbeat masking
+it -- production use (app.py) always leaves it on.
+
 Gait's inputs (current vx/vy/speed/rotation/body_height) are tracked
 independently per axis, updated only by the command type that actually
 carries it -- deliberately not read from MockRobotLink's last_applied
@@ -26,7 +40,7 @@ import dataclasses
 import threading
 import time
 
-from transport.generated_constants import LINK_TIMEOUT_S
+from transport.generated_constants import HEARTBEAT_INTERVAL_S, LINK_TIMEOUT_S
 from transport.link import RobotLink
 from transport.mock_link import MockRobotLink
 from transport.protocol import (
@@ -44,7 +58,12 @@ _DEFAULT_TICK_HZ = 50.0  # matches firmware's CONTROL_LOOP_INTERVAL_MS
 
 
 class SimRobotLink(RobotLink):
-    def __init__(self, connection_timeout_s: float = LINK_TIMEOUT_S, tick_hz: float = _DEFAULT_TICK_HZ) -> None:
+    def __init__(
+        self,
+        connection_timeout_s: float = LINK_TIMEOUT_S,
+        heartbeat_interval_s: float | None = HEARTBEAT_INTERVAL_S,
+        tick_hz: float = _DEFAULT_TICK_HZ,
+    ) -> None:
         super().__init__(connection_timeout_s=connection_timeout_s)
         self._mock = MockRobotLink()
         self.state = RobotState()
@@ -57,11 +76,19 @@ class SimRobotLink(RobotLink):
         self._current_body_height = DEFAULT_BODY_HEIGHT
         self._last_command_at: float | None = None  # None = never sent, mirrors LinkWatchdog::hasEverReceivedPacket
 
+        self._heartbeat_interval_s = heartbeat_interval_s
         self._tick_interval_s = 1.0 / tick_hz
         self._closed = False
         self._stop_event = threading.Event()
+
         self._thread = threading.Thread(target=self._run, name="SimRobotLink", daemon=True)
         self._thread.start()
+        self._heartbeat_thread = None
+        if heartbeat_interval_s is not None:
+            self._heartbeat_thread = threading.Thread(
+                target=self._heartbeat_loop, name="SimRobotLink-heartbeat", daemon=True
+            )
+            self._heartbeat_thread.start()
 
         self._record_telemetry(self._augment(self._mock.latest_telemetry()))
 
@@ -91,6 +118,8 @@ class SimRobotLink(RobotLink):
         self._closed = True
         self._stop_event.set()
         self._thread.join(timeout=1.0)
+        if self._heartbeat_thread is not None:
+            self._heartbeat_thread.join(timeout=1.0)
         self._mock.close()
 
     def snapshot(self) -> RobotSnapshot:
@@ -124,6 +153,18 @@ class SimRobotLink(RobotLink):
                 continue  # frozen -- mirrors firmware's loop() gaitShouldRun gate
 
             self.state.step(dt, vx, vy, speed, rotation, height)
+
+    def _heartbeat_loop(self) -> None:
+        """Mirrors UDPRobotLink._heartbeat_loop: keeps _last_command_at
+        (and therefore is_connected and gait's timeout check) fresh
+        between GUI-driven send() calls, standing in for a real
+        transport's automatic resend -- there is no packet to actually
+        retransmit here, only the freshness bookkeeping a resend would
+        have refreshed on both ends."""
+        while not self._stop_event.wait(self._heartbeat_interval_s):
+            with self._gait_lock:
+                self._last_command_at = time.monotonic()
+            self._record_telemetry(self._augment(self._mock.latest_telemetry()))
 
     def _augment(self, mock_telemetry: Telemetry) -> Telemetry:
         """MockRobotLink's telemetry, with gait_phase populated for real

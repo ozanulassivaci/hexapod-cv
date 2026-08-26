@@ -96,31 +96,46 @@ def test_body_height_persists_across_resent_walk_commands():
 
 
 def test_link_timeout_freezes_gait():
-    link = SimRobotLink(connection_timeout_s=0.1)
+    # heartbeat_interval_s=None: disables the auto-resend so the raw
+    # timeout mechanism is observable directly, not masked by it -- a
+    # real GUI session always leaves the heartbeat on (see
+    # test_holding_a_key_past_link_timeout_does_not_freeze_gait for that
+    # normal-operation case, and the module docstring for why the
+    # heartbeat exists at all).
+    link = SimRobotLink(connection_timeout_s=0.1, heartbeat_interval_s=None)
     link.send(WalkCommand(vx=1.0, vy=0.0, speed=80))
     time.sleep(_SETTLE_S)
     phase_before = link.snapshot().gait_phase
-    time.sleep(0.3)  # past connection_timeout_s, no further sends
+    time.sleep(0.3)  # past connection_timeout_s, no further sends, no heartbeat
     phase_after = link.snapshot().gait_phase
     assert phase_after == pytest.approx(phase_before, abs=1e-9)
     link.close()
 
 
 def test_gait_resumes_after_fresh_command_post_timeout():
-    """A real GUI keeps gait alive by continuously resending the current
-    intent (the heartbeat) -- one fresh send only buys a resumed window
-    up to connection_timeout_s again, so this checks with a settle time
-    well inside that window, not past it (see
-    test_link_timeout_freezes_gait for what happens with nothing
-    resending)."""
-    link = SimRobotLink(connection_timeout_s=0.5)
+    link = SimRobotLink(connection_timeout_s=0.1, heartbeat_interval_s=None)
     link.send(WalkCommand(vx=1.0, vy=0.0, speed=80))
-    time.sleep(0.7)  # let the link time out
+    time.sleep(0.3)  # let the link time out (nothing resending)
     phase_while_frozen = link.snapshot().gait_phase
 
     link.send(WalkCommand(vx=1.0, vy=0.0, speed=80))  # fresh command -- should resume
     time.sleep(_SETTLE_S)
     assert link.snapshot().gait_phase != pytest.approx(phase_while_frozen, abs=1e-9)
+    link.close()
+
+
+def test_holding_a_key_past_link_timeout_does_not_freeze_gait():
+    """The bug the heartbeat exists to prevent: MainWindow sends once per
+    key-state transition, not once per tick (see the module docstring) --
+    holding a key well past connection_timeout_s with no further send()
+    calls must not freeze gait or drop is_connected, matching a real
+    UDPRobotLink session's behavior while a key is held."""
+    link = SimRobotLink(connection_timeout_s=0.3)  # heartbeat on (default, fires every ~0.1s)
+    link.send(WalkCommand(vx=1.0, vy=0.0, speed=80))
+    time.sleep(0.6)  # well past connection_timeout_s, no further explicit send()
+    snap = link.snapshot()
+    assert snap.connected is True
+    assert snap.gait_phase > 0.0
     link.close()
 
 
