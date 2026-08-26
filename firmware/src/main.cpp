@@ -14,10 +14,12 @@
 
 #include "Config.h"
 #include "LinkWatchdog.h"
+#include "NvsServoProfileStore.h"
 #include "Pca9685ServoOutput.h"
 #include "SafeState.h"
 
 static Pca9685ServoOutput servoOutput;
+static NvsServoProfileStore profileStore;
 static LinkWatchdog watchdog(HX_LINK_TIMEOUT_S);
 
 void setup() {
@@ -31,6 +33,8 @@ void setup() {
                         "I2C wiring/address jumpers before trusting anything "
                         "past this point.");
     }
+
+    profileStore.begin();
 
     enterSafeState(servoOutput);  // redundant with begin()'s own release-all; cheap, explicit
     Serial.println("boot: safe state (all channels released), watchdog untripped-since-boot");
