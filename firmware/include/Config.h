@@ -62,12 +62,30 @@
 #define TIBIA_NEUTRAL_PULSE_US BENCH_PULSE_MIN_US
 
 // Fault flag bits, mirrors transport/protocol.py's FAULT_* constants.
-// Only LINK_TIMEOUT is ever set by this build; the others are reserved so
-// the wire format doesn't change when real fault sources exist later.
+// LINK_TIMEOUT and SERVO_FAULT (set when the gait control loop's
+// computed pulse is refused by GatedServoDriver against a bench-recorded
+// limit -- see main.cpp's driveGaitOutputs) are the only bits this build
+// ever sets; ESTOP and BROWNOUT are reserved so the wire format doesn't
+// change when those fault sources exist later.
 #define FAULT_LINK_TIMEOUT_BIT (1u << 0)
 #define FAULT_ESTOP_BIT (1u << 1)
 #define FAULT_SERVO_FAULT_BIT (1u << 2)
 #define FAULT_BROWNOUT_BIT (1u << 3)
+
+// --- Safe-state mode -----------------------------------------------------
+//
+// Build flag, not a runtime command or an inference from recorded servo
+// profiles -- see the design discussion this was built from for the full
+// argument (SafeState.h carries the short version). Defaults to 0
+// (bench/release) because the two misconfigurations are not symmetric:
+// flag=bench on an actually-assembled, standing robot means a fault
+// releases a loaded joint and it drops; flag=assembled on an actually-
+// bare bench servo means a fault just leaves an unloaded servo
+// energized, holding whatever pulse it last had -- mildly wasteful, not
+// damaging. Flip this deliberately, once, after assembly is actually
+// done and before ever letting the robot stand unattended -- see
+// docs/HOW_TO_USE.md.
+#define ROBOT_ASSEMBLED 0
 
 // --- Networking ---------------------------------------------------------
 

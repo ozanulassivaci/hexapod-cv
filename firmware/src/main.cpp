@@ -22,15 +22,19 @@
 #include <Wire.h>
 #include <cstring>
 
+#include "AngleToPulse.h"
 #include "ArmGate.h"
 #include "Config.h"
 #include "DwellGuard.h"
+#include "Gait.h"
 #include "GatedServoDriver.h"
+#include "Kinematics.h"
 #include "LinkWatchdog.h"
 #include "NvsServoProfileStore.h"
 #include "Pca9685ServoOutput.h"
 #include "Protocol.h"
 #include "SafeState.h"
+#include "ServoMap.h"
 #include "ServoProfile.h"
 #include "WifiSetup.h"
 #include "secrets.h"
@@ -45,6 +49,13 @@ static LinkWatchdog linkWatchdog(HX_LINK_TIMEOUT_S);
 static ArmGate calibrationGate(HX_CALIBRATION_ARM_TIMEOUT_S);
 static ArmGate benchGate(HX_BENCH_ARM_TIMEOUT_S);
 static DwellGuard dwellGuard(DWELL_TIMEOUT_S);
+static GaitEngine gaitEngine;
+static uint32_t lastGaitMillis = 0;
+
+// Selected once, at compile time, from Config.h's ROBOT_ASSEMBLED build
+// flag -- see SafeState.h for the full argument for why this is a build
+// flag and not a runtime command or an inference from recorded profiles.
+static const SafetyMode kSafetyMode = ROBOT_ASSEMBLED ? SafetyMode::Assembled : SafetyMode::Bench;
 
 static WifiSetup wifiSetup;
 static WiFiUDP udp;
@@ -74,12 +85,16 @@ static bool otaAllowed() {
         if (dwellGuard.isAway(PCA9685_ADDR_BOARD_A, ch)) return false;
         if (dwellGuard.isAway(PCA9685_ADDR_BOARD_B, ch)) return false;
     }
+    // Gait is real now (it wasn't when this gate was first built) -- an
+    // OTA flash mid-walk would otherwise freeze the control loop
+    // (loop() returns early while otaInProgress) with no warning.
+    if (!isMotionIdle(lastMotion.vx, lastMotion.vy, lastMotion.speed, lastMotion.rate)) return false;
     return true;
 }
 
 static void onOtaStart() {
     otaInProgress = true;
-    gatedDriver.releaseAll();  // defensive -- matches the design's other safety-state triggers
+    enterSafeState(servoOutput, kSafetyMode);  // matches the design's other safety-state triggers
     Serial.println("OTA: update starting");
 }
 
@@ -108,9 +123,11 @@ static void handleCommand(const Command& cmd, uint32_t seq, Telemetry& out) {
         case CommandType::BodyHeight:
         case CommandType::PanTilt:
         case CommandType::Face:
-            // No gait/IK this build -- acknowledged and recorded for
-            // last_applied, no hardware effect. See CLAUDE.md: this
-            // session is scoped to bench-testing plumbing only.
+            // Recorded for last_applied and fed to the gait engine every
+            // control-loop tick (see loop()'s gaitShouldRun) -- Walk/
+            // Turn/BodyHeight now have a real hardware effect. PanTilt/
+            // Face are still acknowledged-but-inert: no pan-tilt or face
+            // hardware exists yet.
             lastMotion.type = cmd.type;
             lastMotion.vx = cmd.vx;
             lastMotion.vy = cmd.vy;
@@ -176,7 +193,23 @@ static void handleCommand(const Command& cmd, uint32_t seq, Telemetry& out) {
 
         case CommandType::BenchMode:
             if (cmd.armed) {
-                if (!benchGate.isArmed()) benchGate.arm(nowS);  // same edge-only reasoning as calibration_mode
+                if (!benchGate.isArmed()) {
+                    // docs/protocol.md Section 8's pre-announced TODO,
+                    // now buildable: bench mode and gait must be
+                    // mutually exclusive, since bench_pulse drives a
+                    // channel directly with no kinematics in the way,
+                    // and gait re-commands the same channels every tick
+                    // otherwise. Refuse the arm request here (gait keeps
+                    // running); gait itself stops ticking once armed
+                    // (see loop()'s gaitShouldRun) -- two sides of the
+                    // same exclusion, checked at different moments.
+                    if (!isMotionIdle(lastMotion.vx, lastMotion.vy, lastMotion.speed, lastMotion.rate)) {
+                        out.ok = false;
+                        std::strncpy(out.error, "gait active, cannot arm bench mode", sizeof(out.error) - 1);
+                        break;
+                    }
+                    benchGate.arm(nowS);  // same edge-only reasoning as calibration_mode
+                }
             } else {
                 benchGate.disarm();
             }
@@ -240,6 +273,47 @@ static void handleCommand(const Command& cmd, uint32_t seq, Telemetry& out) {
     }
 }
 
+// --- gait output -----------------------------------------------------
+
+// Converts the gait engine's current per-leg joint angles into pulses
+// and commands them through GatedServoDriver -- the only path any
+// firmware code may use to command a pulse, so gait output is enforced
+// against a servo's bench-recorded limit exactly like a bench_pulse
+// command is, no separate/bypassable path. Returns true if any pulse was
+// refused (surfaced as FAULT_SERVO_FAULT_BIT by the caller) --
+// ANALYSIS.md Section 5.7's "reachability clamping is silent" gap,
+// closed for the case that now matters: a specific servo's own verified-
+// safe range, not just the generic protocol-level bound.
+static bool driveGaitOutputs() {
+    struct JointOutput {
+        JointType joint;
+        float servoDeg;
+        float neutralServoDeg;
+        uint16_t neutralPulseUs;
+    };
+
+    bool anyRefused = false;
+    for (uint8_t legIndex = 0; legIndex < 6; ++legIndex) {
+        ServoDeg servoDeg = toServoDeg(gaitEngine.state().legAngles[legIndex]);
+        const JointOutput joints[3] = {
+            {JointType::Coxa, servoDeg.coxaDeg, 90.0f, NEUTRAL_PULSE_US},
+            {JointType::Femur, servoDeg.femurDeg, 90.0f, NEUTRAL_PULSE_US},
+            {JointType::Tibia, servoDeg.tibiaDeg, 0.0f, TIBIA_NEUTRAL_PULSE_US},
+        };
+        for (const JointOutput& j : joints) {
+            uint8_t servoIndex = servoIndexFor(legIndex, j.joint);
+            const ServoMapEntry& entry = kServoMap[servoIndex];
+            ServoProfile profile = profileStore.get(servoIndex);
+            uint16_t pulseUs =
+                angleToPulseUs(j.servoDeg, j.neutralServoDeg, j.neutralPulseUs, profile.sign, profile.offsetUs);
+            const char* reason = nullptr;
+            bool applied = gatedDriver.commandPulse(entry.board, entry.channel, pulseUs, true, servoIndex, &reason);
+            if (!applied) anyRefused = true;
+        }
+    }
+    return anyRefused;
+}
+
 static void sendTelemetry(const Telemetry& t) {
     if (!havePcAddr) return;
     uint8_t buf[4096];
@@ -257,6 +331,11 @@ static void buildBaseTelemetry(Telemetry& t) {
     t.benchArmed = benchGate.isArmed();
     t.hasLastApplied = hasMotion;
     if (hasMotion) t.lastApplied = lastMotion;
+    // null while not walking (docs/protocol.md Section 3), matching
+    // isMotionIdle -- the same "idle" definition footTarget()/the
+    // bench-arm-refusal check use.
+    t.hasGaitPhase = !isMotionIdle(lastMotion.vx, lastMotion.vy, lastMotion.speed, lastMotion.rate);
+    t.gaitPhase = gaitEngine.state().phase;
 }
 
 // --- UDP -----------------------------------------------------------------
@@ -309,7 +388,11 @@ static void printStatus() {
     Serial.print(" cal_armed=");
     Serial.print(calibrationGate.isArmed() ? "yes" : "no");
     Serial.print(" bench_armed=");
-    Serial.println(benchGate.isArmed() ? "yes" : "no");
+    Serial.print(benchGate.isArmed() ? "yes" : "no");
+    Serial.print(" safety_mode=");
+    Serial.print(ROBOT_ASSEMBLED ? "assembled" : "bench");
+    Serial.print(" gait_phase=");
+    Serial.println(gaitEngine.state().phase);
 }
 
 static void processSerialLine(String line) {
@@ -401,7 +484,9 @@ void setup() {
                         "I2C wiring/address jumpers before trusting anything past this point.");
     }
     profileStore.begin();
-    gatedDriver.releaseAll();
+    gatedDriver.releaseAll();  // boot state = failsafe state, unconditionally, in both SafetyModes -- see SafeState.h
+    lastMotion.height = kDefaultBodyHeight;  // otherwise gait's first tick would jump from GaitEngine's
+                                              // initial height toward a defaulted-to-0 (crouched) command
 
     wifiSetup.begin();
 
@@ -414,7 +499,10 @@ void setup() {
     ArduinoOTA.onError(onOtaError);
     ArduinoOTA.begin();
 
-    Serial.println("boot: safe state (all channels released), watchdog untripped-since-boot");
+    lastGaitMillis = millis();
+
+    Serial.print("boot: safe state (all channels released), watchdog untripped-since-boot, safety_mode=");
+    Serial.println(ROBOT_ASSEMBLED ? "assembled (hold on fault)" : "bench (release on fault)");
 }
 
 void loop() {
@@ -429,7 +517,7 @@ void loop() {
     // only way to "refuse" given ArduinoOTA's onStart has no reject path.
 
     if (wifiSetup.maintain()) {
-        gatedDriver.releaseAll();  // AP-fallback transition -- defensive, matches the watchdog's own response
+        enterSafeState(servoOutput, kSafetyMode);  // AP-fallback transition -- matches the watchdog's own response
     }
 
     float nowS = millis() / 1000.0f;
@@ -437,7 +525,7 @@ void loop() {
     benchGate.tick(nowS);
 
     if (linkWatchdog.hasTimedOut(nowS)) {
-        gatedDriver.releaseAll();
+        enterSafeState(servoOutput, kSafetyMode);
         calibrationGate.disarm();
         benchGate.disarm();
         faultFlags |= FAULT_LINK_TIMEOUT_BIT;
@@ -445,6 +533,26 @@ void loop() {
 
     processUdp();
     processSerial();
+
+    // Gait runs only when the link is healthy and bench mode isn't
+    // fighting it over the same channels -- not ticking GaitEngine at
+    // all is what "frozen"/"suspended" means here (see Gait.h,
+    // docs/protocol.md Section 8). Re-checks fresh state (a packet
+    // processed just above may have cleared the timeout or changed
+    // bench_armed).
+    uint32_t nowMillis = millis();
+    float dtS = (nowMillis - lastGaitMillis) / 1000.0f;
+    lastGaitMillis = nowMillis;
+    bool gaitShouldRun = !linkWatchdog.hasTimedOut(nowS) && !benchGate.isArmed();
+    if (gaitShouldRun) {
+        gaitEngine.tick(dtS, lastMotion.vx, lastMotion.vy, lastMotion.speed, lastMotion.rate, lastMotion.height);
+        bool anyRefused = driveGaitOutputs();
+        if (anyRefused) {
+            faultFlags |= FAULT_SERVO_FAULT_BIT;
+        } else {
+            faultFlags &= ~FAULT_SERVO_FAULT_BIT;
+        }
+    }
 
     delay(CONTROL_LOOP_INTERVAL_MS);
 }
