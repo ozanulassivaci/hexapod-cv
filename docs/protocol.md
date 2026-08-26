@@ -84,8 +84,9 @@ the robot not moving without plugging in USB":
 | `rail_mv` | reserved, nullable, unpopulated | Needs an ADC + voltage divider that isn't in the current hardware list. Reserving the field now avoids a wire-format change later; nothing sets it yet, and this doc doesn't pretend otherwise. |
 | `ok`, `error` | yes | Result of the most recently processed command, *any* type, not just calibration. Generalizes the "ack round-trip" from §6 into the one reply mechanism telemetry already provides — a rejected `calibrate` (not armed, bad index) reports why here instead of failing silently. |
 | `calibration_armed` | yes | So a GUI can show current arm state continuously rather than inferring it from the last ack. |
+| `bench_armed` | yes | Same idea, for the separate bench-mode gate (§8) — a GUI must be able to show these two arm states independently, since they're independent gates. |
 | `link_timeout_s` | yes | The robot's own compiled-in failsafe timeout. This is the runtime cross-check from §5, not a debugging field as such — the PC compares it against its own `LINK_TIMEOUT_S` on every telemetry receipt and surfaces a loud warning on mismatch (`RobotLink.constants_warning`). |
-| `offsets` | yes, nullable | Full 18-servo calibration table, populated only in reply to `read_offsets`; `null` otherwise. See §6 — this is the "cheap to undo" mechanism, not the arm/disarm gate. |
+| `profiles` | yes, nullable | Full servo profile table (offset, sign, bench-recorded limits, health note — see §7), populated only in reply to `read_offsets`; `null` otherwise. See §6 — this is the "cheap to undo" mechanism, not the arm/disarm gate. |
 
 ## 4. Sequence numbers
 
@@ -187,6 +188,103 @@ than to make it hard to send:
   five-second restore — the actual risk being mitigated is operator error,
   and the mitigation is cheap undo, not prevention.
 
+## 7. Servo profile: merged storage, separate write paths
+
+Bench testing (§8) discovers two more numbers per servo beyond calibration's
+offset/sign: a measured safe minimum and maximum pulse width. The question
+was whether these live in the same table as offset/sign or a separate one.
+
+Merged into one `ServoProfile` record (`servo_index`, `offset_us`, `sign`,
+`min_pulse_us`, `max_pulse_us`, `note`), for the same reason constants got
+one YAML source of truth instead of two independently-maintained copies
+(§5): both describe one physical unit, looked up by the same key, and
+splitting them into two tables means two export files that can silently
+drift apart — the exact failure mode this project has been designing
+against throughout. Extending an existing struct with two nullable ints
+and a string costs far less protocol surface than a second bulk read/
+write/export/import pipeline.
+
+`min_pulse_us`/`max_pulse_us` default to `None`, not `0` or some
+plausible-looking placeholder — a servo that hasn't been bench-tested must
+be distinguishable from one whose limit was recorded as an actual value.
+
+Storage is shared; the *write* paths are not, because offset and limits
+have genuinely different risk profiles (a correction vs. a safety bound
+the firmware is meant to enforce on every command regardless of source):
+
+- `calibrate` / `write_offsets` only ever write `offset_us`/`sign`, gated
+  by `calibration_mode`, exactly as before.
+- `record_limit` only ever writes `min_pulse_us` or `max_pulse_us` (one
+  bound per call, matching the range finder's actual workflow — nudge
+  toward one end, mark it, then the other), gated by `bench_mode` (§8), a
+  different arm switch entirely.
+- `bench_health_note` writes `note`. Not gated by either arm switch — it's
+  advisory record-keeping, not a physical actuation or a safety-relevant
+  value, and you may want to note a unit that isn't even the one currently
+  plugged into the bench rig.
+
+A write to one path must never clobber what the other has recorded — a
+calibration session touching offset/sign preserves whatever limits/note
+already exist for that servo, and vice versa. `MockRobotLink` implements
+this via a merge (`dataclasses.replace` onto the existing record), not an
+overwrite; a real firmware implementation needs the same discipline.
+
+Reading (`read_offsets`) and exporting always return the full profile
+regardless of which write path last touched it — one file, one place to
+look at everything known about a servo, per the same reasoning as above.
+
+## 8. Bench mode: raw pulse control, its own arm gate
+
+Nothing before this session could drive a servo without the full gait/IK
+stack computing an angle first. Bench-testing loose servos before assembly
+needs a direct path: a raw pulse to one PCA9685 channel, no kinematics —
+and that path needs to be unreachable by accident during normal operation.
+
+**A separate arm gate, not an extension of `calibration_mode`.** A stray or
+malformed `calibrate` packet corrupts a trim number. A stray `bench_pulse`
+packet drives a channel directly, with no kinematics and no clamping logic
+standing between the packet and the servo — a materially worse failure
+mode that earns its own explicit `bench_mode(armed)` switch, so arming
+calibration writes and arming raw pulse control are never the same click.
+Same auto-disarm-on-inactivity shape as `calibration_mode`
+(`BENCH_ARM_TIMEOUT_S`, refreshed by bench-related traffic while armed),
+but tracked entirely independently — arming one never arms or extends the
+other.
+
+For real accident-proofing this needs to hold at the firmware level too:
+arming bench mode should suspend the gait control loop, not run alongside
+it. That can't be built without firmware, which is out of scope this
+session — noted here as a firmware TODO, not implied to already be
+enforced by anything built so far.
+
+**Addressed by `(board, channel)`, not `servo_index`.** A loose servo
+being bench-tested hasn't been assigned a leg position yet — there is no
+`servo_index` for it until the operator decides which future position this
+unit becomes. `bench_pulse` is therefore stateless and channel-addressed:
+nothing persists beyond "drive this physical PCA9685 pin now." The moment
+something worth keeping is found (a limit, a health note), that's a
+separate, `servo_index`-addressed action (`record_limit`,
+`bench_health_note`) — the operator explicitly says which future position
+the recording is for, independent of which channel the bench rig happens
+to be wired to this session. Two different addressing schemes because
+they answer two different questions ("what am I driving" vs. "what am I
+recording"), not an oversight.
+
+Bounds on `bench_pulse.pulse_us` (`BENCH_PULSE_MIN_US`/`MAX_US`, 500-2500)
+are the generic hobby-servo envelope, not a per-unit safety limit — a
+sanity check at the protocol level. The GUI additionally narrows its own
+slider to a servo's recorded `min_pulse_us`/`max_pulse_us` once bench
+testing has found them, but before that exists there's nothing to clamp to
+except this generic bound and the operator's own attention, one small
+nudge at a time.
+
+`NEUTRAL_PULSE_US` (1500, the standard hobby-servo center) is used purely
+as a client-side convention for "safe to hold indefinitely" — it is not a
+special wire value. Parking at nominal center (not a per-unit corrected
+value) before pressing a horn onto the spline is deliberate: the small
+per-unit deviation gets corrected later via `offset_us`, during
+calibration, not baked into where the horn physically sits.
+
 ## Commands
 
 Every command packet shares an envelope: `{"v": 1, "seq": <uint32>, "type":
@@ -204,8 +302,12 @@ out-of-range command cannot be built, let alone sent.
 | `face` | `mood` (enum) | `{neutral, happy, angry, surprised, sleepy}` — provisional set, no OLED face implemented yet |
 | `calibrate` | `servo_index` (int), `offset_us` (int), `sign` (int) | `servo_index ∈ [0, 17]`, `offset_us ∈ [-500, 500]`, `sign ∈ {-1, 1}`; requires calibration mode armed |
 | `calibration_mode` | `armed` (bool) | arms/disarms `calibrate` and `write_offsets`; auto-disarms after `CALIBRATION_ARM_TIMEOUT_S` of no calibration-related traffic (§6) |
-| `read_offsets` | — | returns the full 18-servo table via `Telemetry.offsets`; always allowed, armed or not — reading isn't a write |
-| `write_offsets` | `offsets` (list of `{servo_index, offset_us, sign}`, 1-18 entries, no duplicate indices) | bulk restore of some or all of the table; same bounds as `calibrate` per entry; requires calibration mode armed |
+| `read_offsets` | — | returns the full servo profile table via `Telemetry.profiles`; always allowed, armed or not — reading isn't a write |
+| `write_offsets` | `offsets` (list of `{servo_index, offset_us, sign}`, 1-18 entries, no duplicate indices) | bulk restore of offset/sign only, never limits/note (§7); requires calibration mode armed |
+| `bench_mode` | `armed` (bool) | arms/disarms `bench_pulse`/`record_limit`; independent of `calibration_mode` (§8) |
+| `bench_pulse` | `board` (int), `channel` (int), `pulse_us` (int) | `board ∈ {0x40, 0x41}`, `channel ∈ [0, 15]`, `pulse_us ∈ [500, 2500]`; requires bench mode armed |
+| `record_limit` | `servo_index` (int), `bound` (`"min"`/`"max"`), `pulse_us` (int) | `servo_index ∈ [0, 17]`, `pulse_us ∈ [500, 2500]`; requires bench mode armed; rejected if it would make `min_pulse_us >= max_pulse_us` for that servo |
+| `bench_health_note` | `servo_index` (int), `note` (str) | `servo_index ∈ [0, 17]`, `note` ≤ 500 chars; not gated |
 | `ping` | — | — |
 
 `walk` carries both `vx` and `vy` from the start, even though the reference
@@ -244,19 +346,23 @@ specific unit.
 ## Deliverables status
 
 Implemented: `transport/protocol.py` (encode/decode, validation, sequence
-comparison), `transport/link.py` (`RobotLink` base with shared telemetry
-tracking, connection liveness, the constants cross-check, and
-`wait_for_ack`/`send_and_wait`), `transport/udp_link.py`
-(`UDPRobotLink`), `transport/mock_link.py` (`MockRobotLink`, including a
-calibration arm/disarm simulation for GUI development without firmware),
-and `transport/constants.yaml` / `scripts/gen_protocol_constants.py` /
-`transport/generated_constants.py` for §5. Tests cover encode/decode
-round-trips for every command and telemetry, range rejection (including
-NaN/inf and bool-as-number), malformed/wrong-version/unknown-type decode
-rejection, sequence wraparound and out-of-order handling, UDP heartbeat
-timing and telemetry receipt (including out-of-order telemetry not
-clobbering newer data while still counting as liveness), and
-`MockRobotLink` behavior including the calibration gate and bulk
-offset round-trip.
+comparison, `ServoProfile`, bench commands), `transport/link.py`
+(`RobotLink` base with shared telemetry tracking, connection liveness, the
+constants cross-check, and `wait_for_ack`/`send_and_wait`),
+`transport/udp_link.py` (`UDPRobotLink`), `transport/mock_link.py`
+(`MockRobotLink`, simulating both the calibration and bench arm/disarm
+gates independently, and the profile-merge-not-overwrite discipline §7
+depends on), `transport/constants.yaml` / `scripts/gen_protocol_constants.py`
+/ `transport/generated_constants.py` for §5, an operator GUI (`app.py`,
+`ui/`) with Operate/Calibrate/Bench Test tabs, and `control/tracker.py` /
+`control/bench.py` for the AUTO_TRACK and bench dwell/sweep pure logic.
+Tests cover encode/decode round-trips for every command and telemetry
+(including the four bench commands), range rejection, malformed/wrong-
+version/unknown-type decode rejection, sequence wraparound and out-of-order
+handling, UDP heartbeat timing and telemetry receipt, `MockRobotLink`
+behavior including both arm gates and the limit/note merge-preservation
+guarantee, and the bench dwell-guard/sweep pure logic.
 
-No GUI and no firmware were written this session, per scope.
+No firmware has been written in any session — the protocol, GUI, and
+`MockRobotLink` are all built and tested, but nothing has run against a
+real servo yet.
