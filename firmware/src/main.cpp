@@ -67,6 +67,21 @@ static MotionState lastMotion;
 static bool hasMotion = false;
 static uint32_t faultFlags = 0;
 
+// Gait's actual inputs -- deliberately separate from lastMotion, which
+// stays a plain echo of whichever single command was processed most
+// recently (docs/protocol.md Section 3's "compact echo of the currently-
+// active command", a debugging aid). lastMotion.height would get reset
+// to 0 by the very next resent walk/turn packet if gait read height from
+// it directly (the GUI's heartbeat resends walk/turn ~10x/s; body_height
+// is sent once, on slider change, not resent) -- these four/one persist
+// independently per axis instead, updated only by the command type that
+// actually carries them.
+static float currentVx = 0.0f;
+static float currentVy = 0.0f;
+static float currentSpeed = 0.0f;
+static float currentRotation = 0.0f;
+static float currentBodyHeight = kDefaultBodyHeight;
+
 static bool otaInProgress = false;
 
 // --- OTA gate ------------------------------------------------------------
@@ -88,7 +103,7 @@ static bool otaAllowed() {
     // Gait is real now (it wasn't when this gate was first built) -- an
     // OTA flash mid-walk would otherwise freeze the control loop
     // (loop() returns early while otaInProgress) with no warning.
-    if (!isMotionIdle(lastMotion.vx, lastMotion.vy, lastMotion.speed, lastMotion.rate)) return false;
+    if (!isMotionIdle(currentVx, currentVy, currentSpeed, currentRotation)) return false;
     return true;
 }
 
@@ -123,11 +138,9 @@ static void handleCommand(const Command& cmd, uint32_t seq, Telemetry& out) {
         case CommandType::BodyHeight:
         case CommandType::PanTilt:
         case CommandType::Face:
-            // Recorded for last_applied and fed to the gait engine every
-            // control-loop tick (see loop()'s gaitShouldRun) -- Walk/
-            // Turn/BodyHeight now have a real hardware effect. PanTilt/
-            // Face are still acknowledged-but-inert: no pan-tilt or face
-            // hardware exists yet.
+            // last_applied always echoes the single most recent command,
+            // whatever it was -- a debugging aid (docs/protocol.md
+            // Section 3), unrelated to what actually drives gait below.
             lastMotion.type = cmd.type;
             lastMotion.vx = cmd.vx;
             lastMotion.vy = cmd.vy;
@@ -138,6 +151,37 @@ static void handleCommand(const Command& cmd, uint32_t seq, Telemetry& out) {
             lastMotion.tilt = cmd.tilt;
             std::strncpy(lastMotion.mood, cmd.mood, sizeof(lastMotion.mood) - 1);
             hasMotion = true;
+
+            // Gait's actual inputs -- each axis updated only by the
+            // command type that actually carries it, so e.g. a walk
+            // command doesn't reset body height back to whatever a
+            // never-sent body_height field defaults to (see the
+            // currentVx/.../currentBodyHeight declaration comment).
+            switch (cmd.type) {
+                case CommandType::Walk:
+                    currentVx = cmd.vx;
+                    currentVy = cmd.vy;
+                    currentSpeed = cmd.speed;
+                    currentRotation = 0.0f;
+                    break;
+                case CommandType::Turn:
+                    currentVx = 0.0f;
+                    currentVy = 0.0f;
+                    currentSpeed = cmd.speed;
+                    currentRotation = cmd.rate;
+                    break;
+                case CommandType::Stop:
+                    currentVx = 0.0f;
+                    currentVy = 0.0f;
+                    currentSpeed = 0.0f;
+                    currentRotation = 0.0f;
+                    break;
+                case CommandType::BodyHeight:
+                    currentBodyHeight = cmd.height;
+                    break;
+                default:
+                    break;  // PanTilt/Face don't touch any gait axis
+            }
             break;
 
         case CommandType::CalibrationMode:
@@ -203,7 +247,7 @@ static void handleCommand(const Command& cmd, uint32_t seq, Telemetry& out) {
                     // running); gait itself stops ticking once armed
                     // (see loop()'s gaitShouldRun) -- two sides of the
                     // same exclusion, checked at different moments.
-                    if (!isMotionIdle(lastMotion.vx, lastMotion.vy, lastMotion.speed, lastMotion.rate)) {
+                    if (!isMotionIdle(currentVx, currentVy, currentSpeed, currentRotation)) {
                         out.ok = false;
                         std::strncpy(out.error, "gait active, cannot arm bench mode", sizeof(out.error) - 1);
                         break;
@@ -334,7 +378,7 @@ static void buildBaseTelemetry(Telemetry& t) {
     // null while not walking (docs/protocol.md Section 3), matching
     // isMotionIdle -- the same "idle" definition footTarget()/the
     // bench-arm-refusal check use.
-    t.hasGaitPhase = !isMotionIdle(lastMotion.vx, lastMotion.vy, lastMotion.speed, lastMotion.rate);
+    t.hasGaitPhase = !isMotionIdle(currentVx, currentVy, currentSpeed, currentRotation);
     t.gaitPhase = gaitEngine.state().phase;
 }
 
@@ -485,8 +529,6 @@ void setup() {
     }
     profileStore.begin();
     gatedDriver.releaseAll();  // boot state = failsafe state, unconditionally, in both SafetyModes -- see SafeState.h
-    lastMotion.height = kDefaultBodyHeight;  // otherwise gait's first tick would jump from GaitEngine's
-                                              // initial height toward a defaulted-to-0 (crouched) command
 
     wifiSetup.begin();
 
@@ -545,7 +587,7 @@ void loop() {
     lastGaitMillis = nowMillis;
     bool gaitShouldRun = !linkWatchdog.hasTimedOut(nowS) && !benchGate.isArmed();
     if (gaitShouldRun) {
-        gaitEngine.tick(dtS, lastMotion.vx, lastMotion.vy, lastMotion.speed, lastMotion.rate, lastMotion.height);
+        gaitEngine.tick(dtS, currentVx, currentVy, currentSpeed, currentRotation, currentBodyHeight);
         bool anyRefused = driveGaitOutputs();
         if (anyRefused) {
             faultFlags |= FAULT_SERVO_FAULT_BIT;
