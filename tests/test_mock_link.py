@@ -120,6 +120,25 @@ def test_calibration_auto_disarms_after_timeout():
     assert link.latest_telemetry().ok is False
 
 
+def test_calibration_mode_resend_does_not_extend_arm_window():
+    """Edge-triggered, matching firmware's ArmGate::arm(): a resent
+    calibration_mode(armed=True) (indistinguishable on the wire from a
+    deliberate re-click, since the transport resends whatever was last
+    sent) must not extend the window -- only a gated write (calibrate/
+    write_offsets) does that. See docs/protocol.md Section 6."""
+    link = MockRobotLink(calibration_arm_timeout_s=0.2)
+    link.send(CalibrationModeCommand(armed=True))
+    time.sleep(0.1)
+    link.send(CalibrationModeCommand(armed=True))  # simulated resend, must not refresh
+    time.sleep(0.15)
+    # 0.25s since the original arm (> 0.2s timeout); if the resend had
+    # refreshed the window, only 0.15s would have elapsed since then and
+    # this would still be armed. It must not be.
+    link.send(CalibrateCommand(servo_index=0, offset_us=1, sign=1))
+    assert link.latest_telemetry().ok is False
+    assert link.latest_telemetry().error == "calibration not armed"
+
+
 def test_calibrate_while_armed_refreshes_arm_window():
     link = MockRobotLink(calibration_arm_timeout_s=0.2)
     link.send(CalibrationModeCommand(armed=True))
@@ -273,6 +292,75 @@ def test_bench_health_note_not_gated_by_bench_armed():
 
     link.send(ReadOffsetsCommand())
     assert link.latest_telemetry().profiles[3].note == "dead"
+
+
+def test_bench_mode_resend_does_not_extend_arm_window():
+    """Same edge-triggered rule as calibration_mode, mirrored for bench
+    mode's independent gate."""
+    link = MockRobotLink(bench_arm_timeout_s=0.2)
+    link.send(BenchModeCommand(armed=True))
+    time.sleep(0.1)
+    link.send(BenchModeCommand(armed=True))  # simulated resend, must not refresh
+    time.sleep(0.15)
+    link.send(BenchPulseCommand(board=0x40, channel=0, pulse_us=1500))
+    assert link.latest_telemetry().ok is False
+    assert link.latest_telemetry().error == "bench mode not armed"
+
+
+def test_bench_pulse_rejected_below_recorded_min_for_servo():
+    link = MockRobotLink()
+    link.send(BenchModeCommand(armed=True))
+    link.send(RecordLimitCommand(servo_index=2, bound=LimitBound.MIN, pulse_us=1000))
+    link.send(BenchPulseCommand(board=0x40, channel=0, pulse_us=900, servo_index=2))
+    telemetry = link.latest_telemetry()
+    assert telemetry.ok is False
+    assert telemetry.error == "pulse below recorded min for this servo"
+
+
+def test_bench_pulse_rejected_above_recorded_max_for_servo():
+    link = MockRobotLink()
+    link.send(BenchModeCommand(armed=True))
+    link.send(RecordLimitCommand(servo_index=2, bound=LimitBound.MAX, pulse_us=2000))
+    link.send(BenchPulseCommand(board=0x40, channel=0, pulse_us=2100, servo_index=2))
+    telemetry = link.latest_telemetry()
+    assert telemetry.ok is False
+    assert telemetry.error == "pulse above recorded max for this servo"
+
+
+def test_bench_pulse_within_recorded_limits_accepted():
+    link = MockRobotLink()
+    link.send(BenchModeCommand(armed=True))
+    link.send(RecordLimitCommand(servo_index=2, bound=LimitBound.MIN, pulse_us=1000))
+    link.send(RecordLimitCommand(servo_index=2, bound=LimitBound.MAX, pulse_us=2000))
+    link.send(BenchPulseCommand(board=0x40, channel=0, pulse_us=1500, servo_index=2))
+    assert link.latest_telemetry().ok is True
+
+
+def test_bench_pulse_without_servo_index_skips_limit_enforcement():
+    """No servo_index means no identity to look limits up under -- same
+    as firmware's GatedServoDriver, only the generic protocol-level bound
+    applies (already enforced at construction)."""
+    link = MockRobotLink()
+    link.send(BenchModeCommand(armed=True))
+    link.send(RecordLimitCommand(servo_index=2, bound=LimitBound.MIN, pulse_us=1000))
+    link.send(BenchPulseCommand(board=0x40, channel=0, pulse_us=600))
+    assert link.latest_telemetry().ok is True
+
+
+def test_bench_pulse_rejected_by_limit_does_not_refresh_arm_window():
+    link = MockRobotLink(bench_arm_timeout_s=0.2)
+    link.send(BenchModeCommand(armed=True))
+    link.send(RecordLimitCommand(servo_index=2, bound=LimitBound.MIN, pulse_us=1000))
+    time.sleep(0.15)
+    link.send(BenchPulseCommand(board=0x40, channel=0, pulse_us=900, servo_index=2))  # rejected
+    time.sleep(0.1)
+    # 0.25s since arm, > 0.2s timeout -- the rejected pulse above must not
+    # have refreshed the window, matching firmware (refresh happens after
+    # GatedServoDriver::commandPulse succeeds, not before).
+    link.send(BenchPulseCommand(board=0x40, channel=0, pulse_us=1500))
+    telemetry = link.latest_telemetry()
+    assert telemetry.ok is False
+    assert telemetry.error == "bench mode not armed"
 
 
 def test_bench_pulse_refreshes_bench_arm_window():

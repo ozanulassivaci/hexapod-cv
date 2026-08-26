@@ -137,7 +137,18 @@ class MockRobotLink(RobotLink):
             return True, None, None
 
         if isinstance(command, CalibrationModeCommand):
-            self._calibration_armed_until = now + self._calibration_arm_timeout_s if command.armed else None
+            if command.armed:
+                # Edge-triggered, matching firmware's ArmGate::arm() --
+                # only the false->true transition opens a fresh window.
+                # The transport resends whatever was last sent regardless
+                # of type, so a resent armed=true is indistinguishable
+                # from a deliberate re-arm; refreshing on every receipt
+                # would mean an idle-but-armed session with a healthy
+                # link never auto-disarms (docs/protocol.md Section 6).
+                if not calibration_armed:
+                    self._calibration_armed_until = now + self._calibration_arm_timeout_s
+            else:
+                self._calibration_armed_until = None
             return True, None, None
 
         if isinstance(command, CalibrateCommand):
@@ -169,12 +180,23 @@ class MockRobotLink(RobotLink):
             return True, None, tuple(self._profiles[i] for i in range(SERVO_COUNT))
 
         if isinstance(command, BenchModeCommand):
-            self._bench_armed_until = now + self._bench_arm_timeout_s if command.armed else None
+            if command.armed:
+                # Same edge-only reasoning as calibration_mode above.
+                if not bench_armed:
+                    self._bench_armed_until = now + self._bench_arm_timeout_s
+            else:
+                self._bench_armed_until = None
             return True, None, None
 
         if isinstance(command, BenchPulseCommand):
             if not bench_armed:
                 return False, "bench mode not armed", None
+            if command.servo_index is not None:
+                profile = self._profiles[command.servo_index]
+                if profile.min_pulse_us is not None and command.pulse_us < profile.min_pulse_us:
+                    return False, "pulse below recorded min for this servo", None
+                if profile.max_pulse_us is not None and command.pulse_us > profile.max_pulse_us:
+                    return False, "pulse above recorded max for this servo", None
             self._bench_armed_until = now + self._bench_arm_timeout_s
             return True, None, None
 

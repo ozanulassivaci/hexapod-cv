@@ -407,7 +407,10 @@ class BenchTab(QWidget):
     def _send_pulse(self, pulse_us: int) -> None:
         board = self._board_combo.currentData()
         channel = self._channel_spin.value()
-        self.link.send(BenchPulseCommand(board=board, channel=channel, pulse_us=pulse_us))
+        servo_index = self._servo_combo.currentIndex()
+        self.link.send(
+            BenchPulseCommand(board=board, channel=channel, pulse_us=pulse_us, servo_index=servo_index)
+        )
         self._current_pulse = pulse_us
         self._set_pulse_display(pulse_us)
 

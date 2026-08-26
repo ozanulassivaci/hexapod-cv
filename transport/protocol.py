@@ -405,17 +405,23 @@ class BenchModeCommand(Command):
 
 @dataclass(frozen=True)
 class BenchPulseCommand(Command):
-    """Direct pulse to one physical PCA9685 channel. No kinematics, no
-    servo_index -- a loose bench servo hasn't been assigned a leg position
-    yet (see docs/protocol.md Section 8). Bounds here are the generic
-    hobby-servo envelope, not a per-unit safety limit; the GUI additionally
-    narrows its own slider to a servo's recorded min/max_pulse_us once
-    known. Requires bench mode armed."""
+    """Direct pulse to one physical PCA9685 channel. No kinematics --
+    board/channel is "what am I driving", independent of servo_index
+    ("what am I recording"), see docs/protocol.md Section 8. servo_index
+    is optional: a loose bench servo hasn't necessarily been assigned a
+    leg position yet. When given, it lets the receiver enforce that
+    servo's recorded min/max_pulse_us (if any) against this pulse --
+    firmware's GatedServoDriver does this unconditionally; MockRobotLink
+    mirrors it for parity (see transport/mock_link.py). Bounds on
+    pulse_us are the generic hobby-servo envelope, not a per-unit safety
+    limit; the GUI additionally narrows its own slider to a servo's
+    recorded min/max_pulse_us once known. Requires bench mode armed."""
 
     TYPE: ClassVar[CommandType] = CommandType.BENCH_PULSE
     board: int
     channel: int
     pulse_us: int
+    servo_index: int | None = None
 
     def __post_init__(self) -> None:
         if self.board not in PCA9685_BOARD_ADDRESSES:
@@ -424,9 +430,13 @@ class BenchPulseCommand(Command):
             )
         _require_int_range("channel", self.channel, 0, PCA9685_CHANNELS_PER_BOARD - 1)
         _require_int_range("pulse_us", self.pulse_us, BENCH_PULSE_MIN_US, BENCH_PULSE_MAX_US)
+        _require_optional_int_range("servo_index", self.servo_index, 0, SERVO_COUNT - 1)
 
     def _wire_fields(self) -> dict:
-        return {"board": self.board, "channel": self.channel, "pulse_us": self.pulse_us}
+        fields = {"board": self.board, "channel": self.channel, "pulse_us": self.pulse_us}
+        if self.servo_index is not None:
+            fields["servo_index"] = self.servo_index
+        return fields
 
 
 @dataclass(frozen=True)
@@ -567,6 +577,7 @@ def _decode_bench_pulse(fields: dict) -> Command:
         board=_field(fields, "board"),
         channel=_field(fields, "channel"),
         pulse_us=_field(fields, "pulse_us"),
+        servo_index=fields.get("servo_index"),
     )
 
 
