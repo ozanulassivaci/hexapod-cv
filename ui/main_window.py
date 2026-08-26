@@ -20,6 +20,8 @@ from PySide6.QtWidgets import QHBoxLayout, QMainWindow, QTabWidget, QVBoxLayout,
 from control.tracker import Tracker
 from operator_config import OperatorConfig
 from perception.detection import Detector
+from simulator.sim_link import SimRobotLink
+from simulator.sim_view import SimView
 from stream.mjpeg_stream import MJPEGStream
 from transport.link import RobotLink
 from transport.protocol import (
@@ -102,6 +104,10 @@ class MainWindow(QMainWindow):
             default_sweep_duration_s=config.bench.default_sweep_duration_s,
         )
         self.log_panel = LogPanel()
+        # Only meaningful against a simulated link -- shown as its own
+        # tab (not always present) so mock/udp sessions aren't shown an
+        # irrelevant view. None when link isn't a SimRobotLink.
+        self.sim_view = SimView(link) if isinstance(link, SimRobotLink) else None
 
         self._build_layout()
         self._connect_signals()
@@ -126,6 +132,8 @@ class MainWindow(QMainWindow):
         tabs.addTab(operate_tab, "Operate")
         tabs.addTab(self.calibration_tab, "Calibrate")
         tabs.addTab(self.bench_tab, "Bench Test")
+        if self.sim_view is not None:
+            tabs.addTab(self.sim_view, "Simulator")
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -278,6 +286,8 @@ class MainWindow(QMainWindow):
         self.control_panel.set_telemetry(telemetry, self._last_rtt_ms)
         self.calibration_tab.tick(telemetry)
         self.bench_tab.tick(telemetry)
+        if self.sim_view is not None:
+            self.sim_view.tick()
 
     def _drive_auto_track(self, detections) -> None:
         has_target = bool(detections)

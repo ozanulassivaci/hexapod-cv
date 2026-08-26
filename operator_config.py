@@ -28,12 +28,12 @@ class UDPLinkConfig:
 
 @dataclass
 class LinkConfig:
-    mode: str = "mock"  # "mock" | "udp"
+    mode: str = "mock"  # "mock" | "sim" | "udp"
     udp: UDPLinkConfig = field(default_factory=UDPLinkConfig)
 
     def __post_init__(self) -> None:
-        if self.mode not in ("mock", "udp"):
-            raise ValueError(f"link.mode must be 'mock' or 'udp', got {self.mode!r}")
+        if self.mode not in ("mock", "sim", "udp"):
+            raise ValueError(f"link.mode must be 'mock', 'sim', or 'udp', got {self.mode!r}")
 
 
 @dataclass
