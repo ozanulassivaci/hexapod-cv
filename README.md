@@ -26,9 +26,12 @@ robot attached.
   hardware or network — see `docs/protocol.md`
 - Operator GUI (`app.py`) with manual WASD/arrow-key driving, an
   AUTO_TRACK mode that steers toward the largest detection
-  (`control/tracker.py`), and a calibration tab (arm/disarm gate, per-servo
-  trim, bulk offset read/export/import) — runs fully against
-  `MockRobotLink` with no camera and no robot attached
+  (`control/tracker.py`), a calibration tab (arm/disarm gate, per-servo
+  trim, bulk offset read/export/import), and a Bench Test tab for
+  characterizing loose servos before assembly — direct raw-pulse control,
+  its own arm gate, stall/dwell protection (`control/bench.py`) — all of
+  it runs fully against `MockRobotLink` with no camera and no robot
+  attached
 
 ## Tech stack
 
@@ -97,9 +100,16 @@ python app.py
 WASD/arrow keys walk, Q/E turn, Space is an immediate stop reachable
 regardless of focus. Any manual key press drops out of AUTO_TRACK. The
 Calibrate tab arms/disarms per-servo trim writes and can export/import the
-full 18-servo offset table as YAML — export after every calibration
+full servo profile table as YAML — export after every calibration
 session, since that (not the arm/disarm gate) is what makes a bad write
-cheap to undo. See [docs/protocol.md](docs/protocol.md) for the wire
+cheap to undo. The Bench Test tab drives one PCA9685 channel directly (no
+leg, no IK) for testing a loose servo before assembly, behind its own arm
+gate, with automatic stall protection.
+
+See [docs/GUI_GUIDE.md](docs/GUI_GUIDE.md) for what every control does,
+[docs/HOW_TO_USE.md](docs/HOW_TO_USE.md) for physical operating sequence
+(USB is for flashing only — driving and calibration run over WiFi with no
+cable connected), and [docs/protocol.md](docs/protocol.md) for the wire
 protocol this all runs over.
 
 ## Project structure
@@ -123,15 +133,21 @@ hexapod-cv/
 │   ├── mock_link.py             # zero-hardware RobotLink for development
 │   └── constants.yaml / generated_constants.py  # shared timeout/version constants
 ├── control/
-│   └── tracker.py            # AUTO_TRACK steering policy, no Qt, pytest-covered
+│   ├── tracker.py             # AUTO_TRACK steering policy, no Qt, pytest-covered
+│   └── bench.py                # bench dwell-guard + sweep math, no Qt, pytest-covered
 ├── ui/
 │   ├── main_window.py         # wires video/telemetry/keys/AUTO_TRACK together
 │   ├── video_panel.py          # camera feed + detection overlay
 │   ├── control_panel.py         # status, telemetry, sliders, mode, e-stop
-│   ├── calibration_tab.py        # arm/disarm, per-servo trim, offset export/import
-│   ├── log_panel.py               # scrolling command/event log
-│   └── servo_names.py              # servo_index -> leg/joint name for the calibration tab
+│   ├── calibration_tab.py        # arm/disarm, per-servo trim, profile export/import
+│   ├── bench_tab.py                # raw-pulse bench testing: park/sweep/range-finder
+│   ├── log_panel.py                 # scrolling command/event log
+│   └── servo_names.py                # servo_index -> leg/joint name for calibration/bench tabs
 ├── reference/               # ported firmware + critical analysis (ANALYSIS.md)
+├── docs/
+│   ├── protocol.md           # wire protocol design and rationale
+│   ├── GUI_GUIDE.md           # what every app control does
+│   └── HOW_TO_USE.md           # physical operating sequence, USB vs WiFi
 └── tests/                   # pytest suite for all pure logic
 ```
 
@@ -144,9 +160,13 @@ hexapod-cv/
 - No ESP32-S3 firmware yet — the protocol, GUI, and `MockRobotLink` are
   all built and tested, but nothing has run against real servos. See
   `reference/ANALYSIS.md` Section 7 for the planned firmware architecture.
-- The calibration tab's auto-disarm countdown is a client-side estimate,
-  not wire-verified — accurate for how `app.py` constructs a link, would
-  drift against a link built with a non-default arm timeout.
+- The calibration and bench tabs' auto-disarm countdowns are client-side
+  estimates, not wire-verified — accurate for how `app.py` constructs a
+  link, would drift against a link built with a non-default arm timeout.
+- Bench mode's stall/dwell protection is enforced by the GUI, not by
+  firmware (which doesn't exist yet) — real accident-proofing needs the
+  firmware's gait engine and bench mode to be mutually exclusive too. See
+  `docs/protocol.md` Section 8.
 - `stream/` is named that way (not `io/`) to avoid shadowing Python's
   standard-library `io` module when the project root is on `sys.path`.
 
