@@ -21,6 +21,11 @@ This trips people up because "calibration" sounds like it should need a
 wired connection. It doesn't. If you find yourself reaching for a USB
 cable to calibrate or drive the robot, stop — that's not how this works.
 
+Even *flashing new firmware* mostly doesn't need USB after the first time
+— see Section 2's OTA path. USB is genuinely for the very first flash
+(before the ESP32 has WiFi credentials to be reachable at all) and as a
+fallback, not a routine requirement.
+
 Why USB and the servo rail are never live at the same time: connecting USB
 ties your laptop's ground to the ESP32's ground. The servo rail is a 6V
 supply feeding 18 servos, sharing that same ground reference through the
@@ -32,14 +37,16 @@ USB goes in.
 
 ## 1. First-time bring-up
 
-1. Servo rail **OFF**.
-2. Connect the ESP32 to your laptop with USB.
-3. Flash the firmware (see the firmware project's own build instructions
-   for the exact command — this doc doesn't prescribe a toolchain).
-4. While still on USB, configure the ESP32 with your WiFi network's
-   credentials, however the firmware you flashed exposes that step (serial
-   config prompt, a config file baked in at build time, etc. — check the
-   firmware's own docs, since this isn't pinned down yet in this repo).
+WiFi credentials are compiled into the firmware, not entered at runtime —
+you set them before this first flash, and this is the one time flashing
+genuinely requires USB (there's no WiFi connection yet for OTA to use).
+
+1. In `firmware/include/`, copy `secrets.h.example` to `secrets.h` and
+   fill in your real WiFi SSID/password, a fallback AP SSID/password, and
+   an OTA password. `secrets.h` is gitignored — it never gets committed.
+2. Servo rail **OFF**.
+3. Connect the ESP32 to your laptop with USB.
+4. From `firmware/`, flash it: `pio run -e esp32-s3-devkitc-1 -t upload`.
 5. Unplug USB.
 6. Servo rail **ON**.
 7. Launch the GUI: `python app.py`.
@@ -47,14 +54,44 @@ USB goes in.
    your WiFi network and the app found the ESP32. If it's red, see
    "Link won't connect" below before doing anything else.
 
+If the ESP32 couldn't join your network at all, it falls back to hosting
+its own WiFi network (the fallback AP SSID/password from `secrets.h`) so
+you can still reach it — connect your laptop to that network directly and
+`operator_config.yaml`'s `robot_host` will need to point at the ESP32's AP
+address instead (printed over serial if you're on USB to check).
+
 ## 2. The routine flash cycle (updating firmware later)
 
-The ESP32 stays mounted on the robot the whole time — you're not removing
-it, just switching which connection is active.
+Two ways to reflash, depending on what changed.
+
+**2a. OTA (normal case, no USB, servo rail stays on).** WiFi credentials
+already loaded from the first-time flash means the ESP32 is reachable over
+the network — reflashing over WiFi removes the servo-rail-off cycle for
+most updates, which is the entire reason it exists.
+
+1. Make sure nothing is armed — Calibrate and Bench Test tabs both showing
+   DISARMED — and no bench servo is currently being held away from
+   neutral. **OTA is refused in either of those states**, and refused
+   silently: the ESP32 simply won't respond to the update request at all,
+   there's no error message telling you why. If an OTA upload seems to
+   hang or fails to connect, this is the first thing to check.
+2. Servo rail can stay **ON** — this is a WiFi update, not USB, so the
+   ground-path risk "the one rule that matters most" describes doesn't
+   apply here.
+3. From `firmware/`: `pio run -e esp32-s3-devkitc-1 -t upload --upload-port <robot-ip>`
+   (the OTA password from `secrets.h` is required and configured in
+   `platformio.ini`/your upload settings).
+4. Wait for it to finish — the ESP32 reboots into the new firmware on its
+   own once the transfer completes.
+5. Give it a few seconds, then confirm LINK goes green in the GUI again.
+
+**2b. USB (fallback — WiFi credentials changed, OTA isn't reachable, or
+OTA fails).** The ESP32 stays mounted on the robot the whole time — you're
+not removing it, just switching which connection is active.
 
 1. Servo rail **OFF**.
 2. Plug in USB.
-3. Flash the new firmware.
+3. Flash: `pio run -e esp32-s3-devkitc-1 -t upload`.
 4. Unplug USB.
 5. Servo rail **ON**.
 6. Launch the GUI.
@@ -109,6 +146,51 @@ servo rail — but the ESP32 itself talks to you over WiFi, same as always.
    it down last. If it shares power with the servo rail, this happens on
    its own in step 3.
 
+## Measuring PCA9685 oscillator frequency (once per board)
+
+Each PCA9685 board has its own internal oscillator, nominally 25MHz —
+but clone boards drift, sometimes by a few percent, and the two boards can
+drift differently even from the same batch. That drift shifts every pulse
+width on that specific board by the same ratio: "1500us" might actually be
+coming out a few percent off. Do this once per board, before you trust
+absolute pulse-width accuracy for anything — bench testing still works
+fine on the un-measured nominal value in the meantime, this just makes it
+precise.
+
+Tools: a multimeter with a Hz (frequency) measurement mode — common even
+on inexpensive digital multimeters — and, optionally, a servo tester as a
+cross-check. No oscilloscope needed.
+
+1. With the robot powered normally (servo rail on) and bench mode armed,
+   command any channel on the board you're measuring to any pulse that
+   isn't fully on or off (e.g. park it at neutral — see the Bench Test
+   tab).
+2. Set your multimeter to frequency (Hz) mode and probe that channel's
+   output pin against ground.
+3. Read the displayed frequency. It should read close to 50.00Hz; if the
+   oscillator were running exactly at nominal, it would read exactly that.
+4. Compute the board's real oscillator frequency:
+   `measured_osc_freq_hz = 25,000,000 * (measured_frequency_hz / 50.0)`
+5. In `firmware/include/Config.h`, set `PCA9685_OSC_FREQ_BOARD_A_HZ` (for
+   the board at I2C address 0x40) or `PCA9685_OSC_FREQ_BOARD_B_HZ` (0x41)
+   to your measured value.
+6. Reflash (OTA is fine for this) and re-measure the same channel to
+   confirm it now reads close to 50.00Hz.
+7. Repeat for the other board — its oscillator can be off by a different
+   amount.
+
+Optional sanity check: drive a servo to the servo tester's own centered
+preset (most have one, and it's a trustworthy independent reference near
+dead-center) and note the horn's physical position. Then command the same
+servo via the PCA9685 at 1500us with your corrected oscillator value and
+confirm the horn lands in the same spot. This won't give you a precise
+number on its own, but it's a good coarse cross-check that doesn't depend
+on trusting the multimeter alone.
+
+If your multimeter has a duty-cycle mode instead of frequency mode, the
+same idea works: command a known intended duty cycle and compare it
+against the meter's reading, same ratio math.
+
 ## Never do this
 
 - **Never connect USB while the servo rail is live.** See "the one rule
@@ -116,10 +198,18 @@ servo rail — but the ESP32 itself talks to you over WiFi, same as always.
   formality.
 - **Never wire or unwire a servo on a live rail.** A brief short from a
   slipped wire is how you lose a PCA9685 channel or worse.
-- **Never leave a servo held away from neutral and walk away.** Bench
-  Test's dwell protection will auto-return it to neutral after a timeout —
-  but that's a safety net, not permission to be careless. If you're
-  stepping away, park it yourself first.
+- **Never leave a servo held away from neutral and walk away.** Two
+  independent layers of dwell protection exist — the GUI's (moves it back
+  to neutral) and the firmware's (goes limp — releases the channel
+  entirely, since that's the faster and more immediately protective
+  response, and works even if the GUI has crashed or the link has
+  dropped). Either can fire first depending on timing. Both are a safety
+  net, not permission to be careless — if you're stepping away, park it
+  yourself first.
+- **Never assume OTA will work while anything is armed.** It's refused
+  silently — no error, the ESP32 just won't respond — while Calibrate or
+  Bench Test mode is armed, or while any servo is being held away from
+  neutral. Disarm and park first; see Section 2a.
 - **Never click through an import confirmation without reading it.**
   It names the file and the count of entries about to be written. A
   confident "Yes" on the wrong file silently overwrites good calibration.
@@ -141,7 +231,11 @@ servo rail — but the ESP32 itself talks to you over WiFi, same as always.
 2. **Is the ESP32 on the same WiFi network as your laptop?** Not a guest
    network, not a different SSID — the exact same network, and one
    without client isolation (some guest/public networks block devices from
-   reaching each other even when both are connected).
+   reaching each other even when both are connected). If it couldn't join
+   your network at all (or lost the connection mid-session and couldn't
+   get back on), it falls back to hosting its own AP — check whether
+   you're actually still on your normal network, or need to connect to the
+   robot's own fallback network instead.
 3. **Does `operator_config.yaml`'s `link.udp.robot_host` match the ESP32's
    actual IP right now?** If your network uses DHCP, the robot's address
    can change between sessions. Check your router's device list, or
