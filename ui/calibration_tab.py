@@ -1,6 +1,6 @@
 """Calibration tab: arm/disarm gate, per-servo trim, full-table read, and
 YAML export/import -- built against MockRobotLink's arm/disarm gate and
-offset table (transport/mock_link.py), so it's fully usable with zero
+profile table (transport/mock_link.py), so it's fully usable with zero
 hardware.
 
 Unlike control_panel.py, this widget calls RobotLink directly rather than
@@ -17,8 +17,17 @@ arm/disarm gate (that guards against a stray/malformed packet, not
 operator error) -- it's making a bad write cheap to undo via bulk
 read/export/import. The arm/disarm UI matters, but the export reminder is
 the part that's "hard to skip".
+
+This tab only ever writes offset_us/sign (via calibrate/write_offsets).
+min_pulse_us/max_pulse_us/note are written exclusively by the Bench Test
+tab (its own arm gate, its own commands) -- but since both live in the
+same ServoProfile record (docs/protocol.md Section 1), reading/exporting
+here shows the full picture, including whatever bench testing has already
+found. This tab's table is a snapshot as of the last "Read offsets" click,
+not live-synced with the Bench tab -- re-read to see its updates here.
 """
 
+import dataclasses
 import time
 
 import yaml
@@ -47,7 +56,7 @@ from transport.protocol import (
     ProtocolError,
     ReadOffsetsCommand,
     SERVO_COUNT,
-    ServoOffset,
+    ServoProfile,
     Telemetry,
     WriteOffsetsCommand,
 )
@@ -55,6 +64,14 @@ from ui.servo_names import SERVO_NAMES
 
 _SEND_TIMEOUT_S = 0.5  # bounded so a slow/real link can't freeze the UI for long
 _UNEXPORTED_STYLE = "background-color: #e65100; color: white; padding: 6px; font-weight: bold;"
+
+
+def _limits_text(profile: ServoProfile) -> str:
+    if profile.min_pulse_us is None and profile.max_pulse_us is None:
+        return "not bench-tested"
+    lo = profile.min_pulse_us if profile.min_pulse_us is not None else "?"
+    hi = profile.max_pulse_us if profile.max_pulse_us is not None else "?"
+    return f"{lo}-{hi}us"
 
 
 class CalibrationTab(QWidget):
@@ -67,8 +84,8 @@ class CalibrationTab(QWidget):
         self._armed_since: float | None = None
         self._explicit_disarm_pending = False
         self._was_armed = False
-        self._known_offsets: dict[int, ServoOffset] = {}
-        self._exported_offsets: dict[int, ServoOffset] | None = None
+        self._known_profiles: dict[int, ServoProfile] = {}
+        self._exported_profiles: dict[int, ServoProfile] | None = None
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._build_arm_section())
@@ -149,16 +166,18 @@ class CalibrationTab(QWidget):
         return box
 
     def _build_table_section(self) -> QGroupBox:
-        box = QGroupBox("Offset table")
+        box = QGroupBox("Servo profile table")
         layout = QVBoxLayout(box)
 
-        self._read_button = QPushButton("Read offsets from robot")
+        self._read_button = QPushButton("Read profiles from robot")
         self._read_button.setFocusPolicy(Qt.NoFocus)
         self._read_button.clicked.connect(self._on_read_clicked)
         layout.addWidget(self._read_button)
 
-        self._table = QTableWidget(SERVO_COUNT, 4)
-        self._table.setHorizontalHeaderLabels(["#", "servo", "offset (us)", "sign"])
+        self._table = QTableWidget(SERVO_COUNT, 6)
+        self._table.setHorizontalHeaderLabels(
+            ["#", "servo", "offset (us)", "sign", "bench limits", "note"]
+        )
         self._table.setFocusPolicy(Qt.NoFocus)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         for i, name in enumerate(SERVO_NAMES):
@@ -166,6 +185,8 @@ class CalibrationTab(QWidget):
             self._table.setItem(i, 1, QTableWidgetItem(name))
             self._table.setItem(i, 2, QTableWidgetItem("—"))
             self._table.setItem(i, 3, QTableWidgetItem("—"))
+            self._table.setItem(i, 4, QTableWidgetItem("—"))
+            self._table.setItem(i, 5, QTableWidgetItem(""))
         layout.addWidget(self._table)
         return box
 
@@ -271,9 +292,9 @@ class CalibrationTab(QWidget):
 
     def _refresh_servo_controls_from_known(self) -> None:
         servo_index = self._servo_combo.currentIndex()
-        offset = self._known_offsets.get(servo_index, ServoOffset(servo_index, 0, 1))
-        self._offset_slider.setValue(offset.offset_us)
-        self._sign_combo.setCurrentIndex(0 if offset.sign == 1 else 1)
+        profile = self._known_profiles.get(servo_index, ServoProfile(servo_index))
+        self._offset_slider.setValue(profile.offset_us)
+        self._sign_combo.setCurrentIndex(0 if profile.sign == 1 else 1)
 
     def _on_apply_clicked(self) -> None:
         servo_index = self._servo_combo.currentIndex()
@@ -294,27 +315,34 @@ class CalibrationTab(QWidget):
             self.log_message.emit(f"rejected by robot: {telemetry.error}")
             return
 
-        self._known_offsets[servo_index] = ServoOffset(servo_index, offset_us, sign)
+        # Merge onto whatever's locally known -- never blow away a cached
+        # bench limit/note just because this tab only knows about offset/sign.
+        existing = self._known_profiles.get(servo_index, ServoProfile(servo_index))
+        updated = dataclasses.replace(existing, offset_us=offset_us, sign=sign)
+        self._known_profiles[servo_index] = updated
         self._armed_since = time.monotonic()  # matches the robot's own refresh-on-write
-        self._update_table_row(servo_index, offset_us, sign)
+        self._update_table_row(updated)
         self.log_message.emit(f"applied servo {servo_index} ({SERVO_NAMES[servo_index]}): {offset_us}us x{sign}")
 
     # --- bulk read ------------------------------------------------------
 
     def _on_read_clicked(self) -> None:
         telemetry = self._send(ReadOffsetsCommand())
-        if telemetry is None or not telemetry.ok or telemetry.offsets is None:
-            self.log_message.emit("failed to read offset table")
+        if telemetry is None or not telemetry.ok or telemetry.profiles is None:
+            self.log_message.emit("failed to read profile table")
             return
-        for offset in telemetry.offsets:
-            self._known_offsets[offset.servo_index] = offset
-            self._update_table_row(offset.servo_index, offset.offset_us, offset.sign)
+        for profile in telemetry.profiles:
+            self._known_profiles[profile.servo_index] = profile
+            self._update_table_row(profile)
         self._refresh_servo_controls_from_known()
-        self.log_message.emit(f"read {len(telemetry.offsets)} offsets from robot")
+        self.log_message.emit(f"read {len(telemetry.profiles)} servo profiles from robot")
 
-    def _update_table_row(self, servo_index: int, offset_us: int, sign: int) -> None:
-        self._table.setItem(servo_index, 2, QTableWidgetItem(str(offset_us)))
-        self._table.setItem(servo_index, 3, QTableWidgetItem(f"{sign:+d}"))
+    def _update_table_row(self, profile: ServoProfile) -> None:
+        i = profile.servo_index
+        self._table.setItem(i, 2, QTableWidgetItem(str(profile.offset_us)))
+        self._table.setItem(i, 3, QTableWidgetItem(f"{profile.sign:+d}"))
+        self._table.setItem(i, 4, QTableWidgetItem(_limits_text(profile)))
+        self._table.setItem(i, 5, QTableWidgetItem(profile.note))
 
     # --- export / import --------------------------------------------------
 
@@ -322,34 +350,34 @@ class CalibrationTab(QWidget):
         self._export_offsets()
 
     def _export_offsets(self) -> bool:
-        if not self._known_offsets:
+        if not self._known_profiles:
             QMessageBox.warning(
                 self, "Nothing to export",
-                "No known offsets yet -- read the table from the robot first.",
+                "No known servo profiles yet -- read the table from the robot first.",
             )
             return False
 
         path, _filter = QFileDialog.getSaveFileName(
-            self, "Export offsets", "offsets.yaml", "YAML files (*.yaml *.yml)"
+            self, "Export servo profiles", "servo_profiles.yaml", "YAML files (*.yaml *.yml)"
         )
         if not path:
             return False
 
         entries = [
-            self._known_offsets[i].to_dict()
-            for i in sorted(self._known_offsets)
+            self._known_profiles[i].to_dict()
+            for i in sorted(self._known_profiles)
         ]
         with open(path, "w") as f:
             yaml.safe_dump({"offsets": entries}, f, sort_keys=False)
 
-        self._exported_offsets = dict(self._known_offsets)
+        self._exported_profiles = dict(self._known_profiles)
         self._hide_unexported_banner()
-        self.log_message.emit(f"exported {len(entries)} offsets to {path}")
+        self.log_message.emit(f"exported {len(entries)} servo profiles to {path}")
         return True
 
     def _on_import_clicked(self) -> None:
         path, _filter = QFileDialog.getOpenFileName(
-            self, "Import offsets", "", "YAML files (*.yaml *.yml)"
+            self, "Import servo profiles", "", "YAML files (*.yaml *.yml)"
         )
         if not path:
             return
@@ -358,26 +386,28 @@ class CalibrationTab(QWidget):
             with open(path) as f:
                 raw = yaml.safe_load(f) or {}
             entries = raw.get("offsets", [])
-            offsets = [ServoOffset.from_dict(entry) for entry in entries]
+            profiles = [ServoProfile.from_dict(entry) for entry in entries]
         except (OSError, yaml.YAMLError, ProtocolError) as exc:
             QMessageBox.critical(self, "Import failed", f"Could not load {path}:\n{exc}")
             return
 
-        if not offsets:
-            QMessageBox.warning(self, "Import failed", f"{path} contains no offsets.")
+        if not profiles:
+            QMessageBox.warning(self, "Import failed", f"{path} contains no servo profiles.")
             return
 
         choice = QMessageBox.question(
             self,
             "Confirm bulk write",
-            f"Write {len(offsets)} offsets from {path} to the robot now?",
+            f"Write {len(profiles)} trim corrections (offset/sign only -- bench limits and "
+            f"notes are not restored by this import, see the Bench Test tab) from {path} "
+            "to the robot now?",
             QMessageBox.Yes | QMessageBox.No,
         )
         if choice != QMessageBox.Yes:
             return
 
         try:
-            command = WriteOffsetsCommand(offsets=offsets)
+            command = WriteOffsetsCommand(offsets=profiles)
         except ProtocolError as exc:
             QMessageBox.critical(self, "Import failed", f"Invalid offset table:\n{exc}")
             return
@@ -394,19 +424,26 @@ class CalibrationTab(QWidget):
             )
             return
 
-        for offset in offsets:
-            self._known_offsets[offset.servo_index] = offset
-            self._update_table_row(offset.servo_index, offset.offset_us, offset.sign)
+        # Only offset_us/sign actually changed on the robot -- merge just
+        # those fields locally too, don't adopt limits/note from the file
+        # (which may be stale relative to what the robot actually has).
+        for imported in profiles:
+            existing = self._known_profiles.get(imported.servo_index, ServoProfile(imported.servo_index))
+            updated = dataclasses.replace(
+                existing, offset_us=imported.offset_us, sign=imported.sign
+            )
+            self._known_profiles[imported.servo_index] = updated
+            self._update_table_row(updated)
         self._armed_since = time.monotonic()
         self._refresh_servo_controls_from_known()
-        self.log_message.emit(f"wrote {len(offsets)} imported offsets to robot")
+        self.log_message.emit(f"wrote {len(profiles)} imported offset corrections to robot")
 
     # --- helpers ------------------------------------------------------
 
     def _offsets_changed_since_export(self) -> bool:
-        if not self._known_offsets:
+        if not self._known_profiles:
             return False
-        return self._known_offsets != self._exported_offsets
+        return self._known_profiles != self._exported_profiles
 
     def _show_unexported_banner(self) -> None:
         self._unexported_banner.setText(
