@@ -18,6 +18,13 @@ sim` in `operator_config.yaml`) to drive the software simulator, which
 does run gait over time and shows it in a fourth **Simulator** tab — see
 below. Neither mode needs a camera, real servos, or an ESP32.
 
+`python app.py --camera-mode synthetic` goes one step further and
+replaces the real camera too, with a rendered target that reacts to the
+simulator's own heading. AUTO_TRACK on this mode closes the entire
+camera → detection → tracker → gait loop with nothing real anywhere in
+it — the fastest way to see the whole pipeline work, or to reproduce a
+tracking problem without a camera in hand. Implies `--link-mode sim`.
+
 ## The tabs, in one paragraph each
 
 **Operate** is for driving the robot: camera view on the left, controls on

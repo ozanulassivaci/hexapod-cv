@@ -65,6 +65,21 @@ tested on the host with no hardware either.
   failsafe trip live, since nothing else in normal use ever makes the
   simulated link go quiet. Select it with `operator_config.yaml`'s
   `link.mode: sim` or `python app.py --link-mode sim`
+- `SyntheticCameraStream` (`simulator/synthetic_camera.py`) closes the
+  full vision → detection → tracker → gait loop against the simulator
+  with no hardware anywhere in it — a rendered target reacts to the
+  simulator's live heading, and the real `HSVDetector`/`Tracker` run
+  against it unmodified. `python app.py --camera-mode synthetic`; see the
+  demo in Usage below. Used to empirically tune `control/tracker.py`'s
+  dead zone, gain, and a lost-target grace period (`lost_target_hold_s`)
+  against realistic camera latency and detection noise — see that
+  module's docstrings for the numbers found
+- `Telemetry.robot_assembled` reports firmware's compiled-in
+  `ROBOT_ASSEMBLED` flag, shown as a persistent GUI badge (not a log
+  line) so the fault-response mode is visible at a glance — deliberately
+  *not* cross-checked for staleness, since nothing in this system can
+  observe physical assembly state; see `docs/protocol.md` Section 9 for
+  why that was ruled out rather than left undone
 
 ## Tech stack
 
@@ -131,6 +146,7 @@ defaults to `MockRobotLink`, configured in
 ```bash
 python app.py
 python app.py --link-mode sim   # drive the software simulator instead of MockRobotLink/real hardware
+python app.py --camera-mode synthetic   # closes vision -> tracker -> gait end to end, no hardware
 ```
 
 WASD/arrow keys walk, Q/E turn, Space is an immediate stop reachable
@@ -143,6 +159,20 @@ leg, no IK) for testing a loose servo before assembly, behind its own arm
 gate, with automatic stall protection. Against `--link-mode sim`, a
 Simulator tab shows a live top-down view of gait — stance/swing legs and
 body position/heading — driven by the same commands.
+
+`--camera-mode synthetic` swaps the real camera for a rendered target
+that reacts to the simulator's own heading — the real `HSVDetector` and
+`Tracker` run against it exactly as they would a real stream. Switching
+to AUTO_TRACK closes the whole pipeline (camera → detection → tracker →
+gait) with nothing real anywhere in it, the first time this project has
+run it as one system rather than in isolation:
+
+![AUTO_TRACK closing the loop against a synthetic target: the detected target moves toward frame center as the simulated robot turns to face it](docs/closed_loop_demo.png)
+
+(left to right, top to bottom: target acquired off-center → the turn
+command's rate shrinks toward zero as heading catches up → converged,
+holding center.) A short screen recording of the same run is at
+[docs/closed_loop_demo.mp4](docs/closed_loop_demo.mp4).
 
 See [docs/GUI_GUIDE.md](docs/GUI_GUIDE.md) for what every control does,
 [docs/HOW_TO_USE.md](docs/HOW_TO_USE.md) for physical operating sequence
@@ -192,7 +222,8 @@ hexapod-cv/
 ├── simulator/                # hardware-free RobotLink that runs gait over time
 │   ├── robot_state.py         # wraps robot/gait.py's GaitState + a dead-reckoned body pose
 │   ├── sim_link.py              # SimRobotLink: RobotLink impl, background stepping + heartbeat
-│   └── sim_view.py               # QPainter top-down 2D view (body pose, per-leg stance/swing)
+│   ├── sim_view.py               # QPainter top-down 2D view (body pose, per-leg stance/swing)
+│   └── synthetic_camera.py        # renders a target reacting to SimRobotLink's heading -- closes the vision loop
 ├── ui/
 │   ├── main_window.py         # wires video/telemetry/keys/AUTO_TRACK together
 │   ├── video_panel.py          # camera feed + detection overlay
@@ -246,6 +277,22 @@ hexapod-cv/
   side to cross-check it against (a real hexapod's body moves because its
   legs push against the ground, not because anything computes a
   body-frame transform).
+- `Tracker`'s "largest detection wins" tie-break has no defined behavior
+  for two equally-sized detections — found via closed-loop simulation
+  testing (two same-size synthetic targets): it deterministically favors
+  whichever contour `cv2.findContours` happens to enumerate first, an
+  OpenCV implementation detail, not a principled criterion (closest to
+  center, say). Confirmed *not* to cause target-switching flicker when
+  two real (unequal, even if close) objects are in frame — only an exact
+  tie is affected, and it doesn't change from run to run. Not fixed:
+  deciding a real tie-break policy is a judgment call, not an obvious bug
+  fix, and the investigation that found this didn't show it causing a
+  bad outcome, just an arbitrary one.
+- `Tracker`'s turn-direction sign convention (positive `rate` steers
+  toward positive `cx`) is asserted, not measured — chosen so
+  `simulator/synthetic_camera.py`'s closed loop converges, which is the
+  strongest check available without real hardware to confirm which
+  physical direction a positive turn rate actually drives.
 - `stream/` is named that way (not `io/`) to avoid shadowing Python's
   standard-library `io` module when the project root is on `sys.path`.
 

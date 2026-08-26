@@ -17,6 +17,10 @@ env/
 *.engine
 *.mp4
 *.avi
+# Named exception: a small (~500KB), deliberately committed demo
+# recording -- the blanket *.mp4 rule above still applies to everything
+# else (guards against accidentally committing a large capture).
+!docs/closed_loop_demo.mp4
 
 # firmware (PlatformIO)
 firmware/.pio/
