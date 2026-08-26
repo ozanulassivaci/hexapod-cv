@@ -16,3 +16,4 @@ sequence_bits: 32
 link_timeout_s: 1.0
 heartbeat_interval_s: 0.1
 calibration_arm_timeout_s: 30.0
+bench_arm_timeout_s: 60.0

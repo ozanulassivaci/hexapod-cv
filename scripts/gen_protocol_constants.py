@@ -37,6 +37,7 @@ def main() -> None:
     lines.append(
         f"CALIBRATION_ARM_TIMEOUT_S = {values['calibration_arm_timeout_s']!r}\n"
     )
+    lines.append(f"BENCH_ARM_TIMEOUT_S = {values['bench_arm_timeout_s']!r}\n")
 
     OUTPUT.write_text("".join(lines))
     print(f"wrote {OUTPUT.relative_to(REPO_ROOT)}")

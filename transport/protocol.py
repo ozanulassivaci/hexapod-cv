@@ -27,6 +27,17 @@ CALIBRATION_OFFSET_LIMIT_US = 500
 PAN_TILT_MIN_DEG = -90.0
 PAN_TILT_MAX_DEG = 90.0
 
+# Bench mode: raw pulse to a physical PCA9685 channel, no kinematics, no
+# servo_index (a loose servo hasn't been assigned a leg position yet). See
+# docs/protocol.md Section 8 for why this is a separate command family with
+# its own arm gate rather than an extension of calibrate.
+PCA9685_BOARD_ADDRESSES = (0x40, 0x41)
+PCA9685_CHANNELS_PER_BOARD = 16
+BENCH_PULSE_MIN_US = 500
+BENCH_PULSE_MAX_US = 2500
+NEUTRAL_PULSE_US = 1500  # nominal hobby-servo center; per-unit correction is offset_us, applied later
+HEALTH_NOTE_MAX_LEN = 500
+
 FAULT_NONE = 0
 FAULT_LINK_TIMEOUT = 1 << 0
 FAULT_ESTOP = 1 << 1
@@ -50,6 +61,10 @@ class CommandType(str, Enum):
     CALIBRATION_MODE = "calibration_mode"
     READ_OFFSETS = "read_offsets"
     WRITE_OFFSETS = "write_offsets"
+    BENCH_MODE = "bench_mode"
+    BENCH_PULSE = "bench_pulse"
+    RECORD_LIMIT = "record_limit"
+    BENCH_HEALTH_NOTE = "bench_health_note"
     PING = "ping"
 
 
@@ -61,6 +76,11 @@ class Mood(str, Enum):
     ANGRY = "angry"
     SURPRISED = "surprised"
     SLEEPY = "sleepy"
+
+
+class LimitBound(str, Enum):
+    MIN = "min"
+    MAX = "max"
 
 
 def has_fault(fault_flags: int, bit: int) -> bool:
@@ -79,6 +99,12 @@ def _require_int_range(name: str, value, lo: int, hi: int) -> None:
         raise ProtocolError(f"{name} must be an int, got {value!r}")
     if not (lo <= value <= hi):
         raise ProtocolError(f"{name}={value!r} out of range [{lo}, {hi}]")
+
+
+def _require_optional_int_range(name: str, value, lo: int, hi: int) -> None:
+    if value is None:
+        return
+    _require_int_range(name, value, lo, hi)
 
 
 def _field(fields: dict, name: str):
@@ -184,8 +210,10 @@ class FaceCommand(Command):
 @dataclass(frozen=True)
 class CalibrateCommand(Command):
     """Single-servo trim write. Servo-scoped, not leg-scoped -- see
-    docs/protocol.md's note on ANALYSIS.md Section 3. Requires calibration
-    mode to be armed; see CalibrationModeCommand."""
+    docs/protocol.md's note on ANALYSIS.md Section 3. Only ever touches
+    offset_us/sign, never the pulse limits (see ServoProfile) -- those are
+    bench mode's concern, written only by RecordLimitCommand. Requires
+    calibration mode to be armed; see CalibrationModeCommand."""
 
     TYPE: ClassVar[CommandType] = CommandType.CALIBRATE
     servo_index: int
@@ -212,13 +240,29 @@ class CalibrateCommand(Command):
 
 
 @dataclass(frozen=True)
-class ServoOffset:
-    """One entry of the 18-servo calibration table. Used in WriteOffsetsCommand
-    and in Telemetry.offsets (the read_offsets reply)."""
+class ServoProfile:
+    """Everything known about one physical servo, keyed by servo_index.
+    offset_us/sign are a correction, written only via CalibrateCommand/
+    WriteOffsetsCommand (calibration_mode gated). min_pulse_us/max_pulse_us
+    are a safety bound the firmware is meant to enforce on every command
+    regardless of source, written only via RecordLimitCommand (bench_mode
+    gated) -- both live in one record because they describe the same unit
+    and because splitting them risks the export/import files silently
+    drifting apart, but the two write paths stay separate on purpose (see
+    docs/protocol.md Section 1). note is a free-text health note, ungated
+    since it's advisory record-keeping, not something the firmware acts on.
+
+    min_pulse_us/max_pulse_us are None until a bench session has recorded
+    them -- that must be distinguishable from "recorded as 0", so this is
+    not defaulted to a fake safe-looking number.
+    """
 
     servo_index: int
-    offset_us: int
+    offset_us: int = 0
     sign: int = 1
+    min_pulse_us: int | None = None
+    max_pulse_us: int | None = None
+    note: str = ""
 
     def __post_init__(self) -> None:
         _require_int_range("servo_index", self.servo_index, 0, SERVO_COUNT - 1)
@@ -230,26 +274,50 @@ class ServoOffset:
         )
         if self.sign not in (-1, 1):
             raise ProtocolError(f"sign must be -1 or 1, got {self.sign!r}")
+        _require_optional_int_range(
+            "min_pulse_us", self.min_pulse_us, BENCH_PULSE_MIN_US, BENCH_PULSE_MAX_US
+        )
+        _require_optional_int_range(
+            "max_pulse_us", self.max_pulse_us, BENCH_PULSE_MIN_US, BENCH_PULSE_MAX_US
+        )
+        if (
+            self.min_pulse_us is not None
+            and self.max_pulse_us is not None
+            and self.min_pulse_us >= self.max_pulse_us
+        ):
+            raise ProtocolError(
+                f"min_pulse_us ({self.min_pulse_us}) must be < max_pulse_us ({self.max_pulse_us})"
+            )
+        if not isinstance(self.note, str):
+            raise ProtocolError(f"note must be a string, got {self.note!r}")
+        if len(self.note) > HEALTH_NOTE_MAX_LEN:
+            raise ProtocolError(f"note exceeds {HEALTH_NOTE_MAX_LEN} characters")
 
     def to_dict(self) -> dict:
         return {
             "servo_index": self.servo_index,
             "offset_us": self.offset_us,
             "sign": self.sign,
+            "min_pulse_us": self.min_pulse_us,
+            "max_pulse_us": self.max_pulse_us,
+            "note": self.note,
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ServoOffset":
+    def from_dict(cls, data: dict) -> "ServoProfile":
         if not isinstance(data, dict):
-            raise ProtocolError(f"offset entry must be an object, got {data!r}")
+            raise ProtocolError(f"profile entry must be an object, got {data!r}")
         try:
             return cls(
                 servo_index=data["servo_index"],
-                offset_us=data["offset_us"],
+                offset_us=data.get("offset_us", 0),
                 sign=data.get("sign", 1),
+                min_pulse_us=data.get("min_pulse_us"),
+                max_pulse_us=data.get("max_pulse_us"),
+                note=data.get("note", ""),
             )
         except KeyError as exc:
-            raise ProtocolError(f"offset entry missing field {exc}") from None
+            raise ProtocolError(f"profile entry missing field {exc}") from None
 
 
 @dataclass(frozen=True)
@@ -271,7 +339,8 @@ class CalibrationModeCommand(Command):
 
 @dataclass(frozen=True)
 class ReadOffsetsCommand(Command):
-    """Requests the full 18-servo calibration table back via telemetry.
+    """Requests the full servo profile table back via telemetry (offsets,
+    limits, and health notes for every servo_index that has any recorded).
     Always allowed, armed or not -- reading is not a write."""
 
     TYPE: ClassVar[CommandType] = CommandType.READ_OFFSETS
@@ -282,10 +351,11 @@ class ReadOffsetsCommand(Command):
 
 @dataclass(frozen=True)
 class WriteOffsetsCommand(Command):
-    """Bulk restore of the calibration table, e.g. from a GUI-exported
-    YAML file. Requires calibration mode armed, same as CalibrateCommand.
-    Exists so a bad calibration session is a five-second bulk restore, not
-    18 individual re-sends."""
+    """Bulk restore of offset_us/sign, e.g. from a GUI-exported YAML file.
+    Requires calibration mode armed, same as CalibrateCommand. Exists so a
+    bad calibration session is a five-second bulk restore, not 18
+    individual re-sends. Does not touch min_pulse_us/max_pulse_us/note even
+    though ServoProfile carries them -- those are bench mode's concern."""
 
     TYPE: ClassVar[CommandType] = CommandType.WRITE_OFFSETS
     offsets: tuple
@@ -298,14 +368,109 @@ class WriteOffsetsCommand(Command):
             raise ProtocolError(
                 f"write_offsets got {len(self.offsets)} entries, max {SERVO_COUNT}"
             )
-        if not all(isinstance(o, ServoOffset) for o in self.offsets):
-            raise ProtocolError("write_offsets entries must be ServoOffset")
+        if not all(isinstance(o, ServoProfile) for o in self.offsets):
+            raise ProtocolError("write_offsets entries must be ServoProfile")
         indices = [o.servo_index for o in self.offsets]
         if len(indices) != len(set(indices)):
             raise ProtocolError("write_offsets has duplicate servo_index entries")
 
     def _wire_fields(self) -> dict:
-        return {"offsets": [o.to_dict() for o in self.offsets]}
+        return {
+            "offsets": [
+                {"servo_index": o.servo_index, "offset_us": o.offset_us, "sign": o.sign}
+                for o in self.offsets
+            ]
+        }
+
+
+@dataclass(frozen=True)
+class BenchModeCommand(Command):
+    """Arms or disarms bench_pulse/record_limit. Separate from
+    calibration_mode on purpose -- see docs/protocol.md Section 8: a stray
+    calibrate packet corrupts a trim number, a stray bench_pulse packet
+    drives a channel directly with no kinematics or clamping in the way,
+    which is a materially worse failure mode and earns its own switch.
+    Auto-disarms after BENCH_ARM_TIMEOUT_S of no bench-related traffic."""
+
+    TYPE: ClassVar[CommandType] = CommandType.BENCH_MODE
+    armed: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.armed, bool):
+            raise ProtocolError(f"armed must be a bool, got {self.armed!r}")
+
+    def _wire_fields(self) -> dict:
+        return {"armed": self.armed}
+
+
+@dataclass(frozen=True)
+class BenchPulseCommand(Command):
+    """Direct pulse to one physical PCA9685 channel. No kinematics, no
+    servo_index -- a loose bench servo hasn't been assigned a leg position
+    yet (see docs/protocol.md Section 8). Bounds here are the generic
+    hobby-servo envelope, not a per-unit safety limit; the GUI additionally
+    narrows its own slider to a servo's recorded min/max_pulse_us once
+    known. Requires bench mode armed."""
+
+    TYPE: ClassVar[CommandType] = CommandType.BENCH_PULSE
+    board: int
+    channel: int
+    pulse_us: int
+
+    def __post_init__(self) -> None:
+        if self.board not in PCA9685_BOARD_ADDRESSES:
+            raise ProtocolError(
+                f"board={self.board!r} not in {PCA9685_BOARD_ADDRESSES}"
+            )
+        _require_int_range("channel", self.channel, 0, PCA9685_CHANNELS_PER_BOARD - 1)
+        _require_int_range("pulse_us", self.pulse_us, BENCH_PULSE_MIN_US, BENCH_PULSE_MAX_US)
+
+    def _wire_fields(self) -> dict:
+        return {"board": self.board, "channel": self.channel, "pulse_us": self.pulse_us}
+
+
+@dataclass(frozen=True)
+class RecordLimitCommand(Command):
+    """Records a bench-discovered safe pulse bound into servo_index's
+    profile. servo_index-scoped (not board/channel) because this is what
+    persists once the loose servo being bench-tested is assigned to a
+    future leg position. Requires bench mode armed."""
+
+    TYPE: ClassVar[CommandType] = CommandType.RECORD_LIMIT
+    servo_index: int
+    bound: LimitBound
+    pulse_us: int
+
+    def __post_init__(self) -> None:
+        _require_int_range("servo_index", self.servo_index, 0, SERVO_COUNT - 1)
+        if not isinstance(self.bound, LimitBound):
+            raise ProtocolError(f"bound must be a LimitBound, got {self.bound!r}")
+        _require_int_range("pulse_us", self.pulse_us, BENCH_PULSE_MIN_US, BENCH_PULSE_MAX_US)
+
+    def _wire_fields(self) -> dict:
+        return {"servo_index": self.servo_index, "bound": self.bound.value, "pulse_us": self.pulse_us}
+
+
+@dataclass(frozen=True)
+class BenchHealthNoteCommand(Command):
+    """Free-text health note for servo_index ("buzzes at low end", "dead").
+    Not gated by bench mode -- it's advisory record-keeping, not a physical
+    actuation or a safety-relevant value, and you may want to note a unit
+    that isn't the one currently plugged into the bench rig."""
+
+    TYPE: ClassVar[CommandType] = CommandType.BENCH_HEALTH_NOTE
+    servo_index: int
+    note: str
+
+    def __post_init__(self) -> None:
+        _require_int_range("servo_index", self.servo_index, 0, SERVO_COUNT - 1)
+        if not isinstance(self.note, str):
+            raise ProtocolError(f"note must be a string, got {self.note!r}")
+        if len(self.note) > HEALTH_NOTE_MAX_LEN:
+            raise ProtocolError(f"note exceeds {HEALTH_NOTE_MAX_LEN} characters")
+
+    def _wire_fields(self) -> dict:
+        return {"servo_index": self.servo_index, "note": self.note}
 
 
 @dataclass(frozen=True)
@@ -388,7 +553,42 @@ def _decode_write_offsets(fields: dict) -> Command:
     raw_offsets = _field(fields, "offsets")
     if not isinstance(raw_offsets, list):
         raise ProtocolError("offsets must be a list")
-    return WriteOffsetsCommand(offsets=tuple(ServoOffset.from_dict(o) for o in raw_offsets))
+    return WriteOffsetsCommand(offsets=tuple(ServoProfile.from_dict(o) for o in raw_offsets))
+
+
+@_register(CommandType.BENCH_MODE)
+def _decode_bench_mode(fields: dict) -> Command:
+    return BenchModeCommand(armed=_field(fields, "armed"))
+
+
+@_register(CommandType.BENCH_PULSE)
+def _decode_bench_pulse(fields: dict) -> Command:
+    return BenchPulseCommand(
+        board=_field(fields, "board"),
+        channel=_field(fields, "channel"),
+        pulse_us=_field(fields, "pulse_us"),
+    )
+
+
+@_register(CommandType.RECORD_LIMIT)
+def _decode_record_limit(fields: dict) -> Command:
+    raw_bound = _field(fields, "bound")
+    try:
+        bound = LimitBound(raw_bound)
+    except ValueError:
+        raise ProtocolError(f"unknown bound {raw_bound!r}") from None
+    return RecordLimitCommand(
+        servo_index=_field(fields, "servo_index"),
+        bound=bound,
+        pulse_us=_field(fields, "pulse_us"),
+    )
+
+
+@_register(CommandType.BENCH_HEALTH_NOTE)
+def _decode_bench_health_note(fields: dict) -> Command:
+    return BenchHealthNoteCommand(
+        servo_index=_field(fields, "servo_index"), note=_field(fields, "note")
+    )
 
 
 @_register(CommandType.PING)
@@ -459,8 +659,10 @@ class Telemetry:
     """Sent as a synchronous reply to every command the robot processes --
     see docs/protocol.md Section 3 for why there's no independent send
     schedule. `last_applied` reflects motion/pose state only (walk, turn,
-    stop, body_height, pan_tilt, face); calibration-family commands report
-    through `ok`/`error`/`offsets` instead, not through `last_applied`."""
+    stop, body_height, pan_tilt, face); calibration- and bench-family
+    commands report through `ok`/`error`/`profiles` instead, not through
+    `last_applied` -- bench_pulse in particular is not motion/pose state,
+    it's direct hardware I/O with no kinematic meaning."""
 
     seq_echo: int
     ok: bool
@@ -470,8 +672,9 @@ class Telemetry:
     rail_mv: int | None
     link_timeout_s: float
     calibration_armed: bool
+    bench_armed: bool
     last_applied: Command | None
-    offsets: tuple | None
+    profiles: tuple | None
 
 
 def encode_telemetry(telemetry: Telemetry) -> bytes:
@@ -485,13 +688,14 @@ def encode_telemetry(telemetry: Telemetry) -> bytes:
         "rail_mv": telemetry.rail_mv,
         "link_timeout_s": telemetry.link_timeout_s,
         "calibration_armed": telemetry.calibration_armed,
+        "bench_armed": telemetry.bench_armed,
         "last_applied": (
             {"type": telemetry.last_applied.TYPE.value, **telemetry.last_applied._wire_fields()}
             if telemetry.last_applied is not None
             else None
         ),
-        "offsets": (
-            [o.to_dict() for o in telemetry.offsets] if telemetry.offsets is not None else None
+        "profiles": (
+            [p.to_dict() for p in telemetry.profiles] if telemetry.profiles is not None else None
         ),
     }
     return json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -507,6 +711,7 @@ def decode_telemetry(data: bytes) -> Telemetry:
         fault_flags = payload["fault_flags"]
         link_timeout_s = payload["link_timeout_s"]
         calibration_armed = payload["calibration_armed"]
+        bench_armed = payload["bench_armed"]
     except KeyError as exc:
         raise ProtocolError(f"telemetry missing field {exc}") from None
 
@@ -516,6 +721,8 @@ def decode_telemetry(data: bytes) -> Telemetry:
         raise ProtocolError(f"invalid fault_flags: {fault_flags!r}")
     if not isinstance(calibration_armed, bool):
         raise ProtocolError(f"calibration_armed must be a bool, got {calibration_armed!r}")
+    if not isinstance(bench_armed, bool):
+        raise ProtocolError(f"bench_armed must be a bool, got {bench_armed!r}")
     if not isinstance(link_timeout_s, (int, float)) or isinstance(link_timeout_s, bool):
         raise ProtocolError(f"link_timeout_s must be a number, got {link_timeout_s!r}")
 
@@ -536,12 +743,12 @@ def decode_telemetry(data: bytes) -> Telemetry:
     if rail_mv is not None and (not isinstance(rail_mv, int) or isinstance(rail_mv, bool)):
         raise ProtocolError(f"rail_mv must be an int or null, got {rail_mv!r}")
 
-    raw_offsets = payload.get("offsets")
-    offsets = None
-    if raw_offsets is not None:
-        if not isinstance(raw_offsets, list):
-            raise ProtocolError("offsets must be a list or null")
-        offsets = tuple(ServoOffset.from_dict(o) for o in raw_offsets)
+    raw_profiles = payload.get("profiles")
+    profiles = None
+    if raw_profiles is not None:
+        if not isinstance(raw_profiles, list):
+            raise ProtocolError("profiles must be a list or null")
+        profiles = tuple(ServoProfile.from_dict(p) for p in raw_profiles)
 
     raw_last_applied = payload.get("last_applied")
     last_applied = _decode_command_dict(raw_last_applied) if raw_last_applied is not None else None
@@ -555,8 +762,9 @@ def decode_telemetry(data: bytes) -> Telemetry:
         rail_mv=rail_mv,
         link_timeout_s=float(link_timeout_s),
         calibration_armed=calibration_armed,
+        bench_armed=bench_armed,
         last_applied=last_applied,
-        offsets=offsets,
+        profiles=profiles,
     )
 
 
