@@ -1,0 +1,110 @@
+"""Generates tests/fixtures/kinematics_golden.json from robot/kinematics.py.
+
+Manual step, run after changing robot/kinematics.py's math (not wired into
+any build/test step, same "manual codegen, not a hook" philosophy as
+scripts/gen_protocol_constants.py -- see docs/protocol.md Section 5).
+
+The fixture is the cross-check artifact between this project's two
+independent kinematics implementations (robot/kinematics.py and
+firmware/lib/core/Kinematics.cpp) -- see reference/ANALYSIS.md Section 7
+for why there are two, not one shared via a Python extension. Both
+tests/test_kinematics.py and firmware/test/test_kinematics/ load this same
+file and assert against it; regenerating it here only from the Python side
+means it defines "correct", and the C++ port is checked against it, not
+the other way around.
+
+    python scripts/gen_kinematics_golden.py
+"""
+
+import json
+import pathlib
+import sys
+
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO_ROOT))
+
+from robot.kinematics import LEGS, JointAngles, Point3, forward_kinematics, inverse_kinematics  # noqa: E402
+
+OUT_PATH = _REPO_ROOT / "tests" / "fixtures" / "kinematics_golden.json"
+
+# Representative angle sets per leg for FK, in this module's raw
+# (coxa_deg, femur_deg, tibia_deg) convention -- tibia_deg is raw gamma,
+# so it's <= 0. "neutral" matches the reference's neutralAngles(0, pi/4,
+# -pi/2) exactly.
+FK_ANGLE_CASES = {
+    "neutral": JointAngles(coxa_deg=0.0, femur_deg=45.0, tibia_deg=-90.0),
+    "coxa_swing": JointAngles(coxa_deg=20.0, femur_deg=45.0, tibia_deg=-90.0),
+    "crouched": JointAngles(coxa_deg=-15.0, femur_deg=-30.0, tibia_deg=-60.0),
+    "extended": JointAngles(coxa_deg=10.0, femur_deg=60.0, tibia_deg=-120.0),
+}
+
+# Representative IK targets, body-frame absolute (not leg-relative) --
+# includes the reference's own neutral home point (computed via FK below,
+# so IK(FK(neutral)) is exercised too), plus points that force the
+# reachability clamp so both implementations' clamp math is checked, not
+# just the well-behaved path.
+IK_EXTRA_TARGETS = {
+    "near": Point3(x=80.0, y=-40.0, z=-40.0),
+    "far_clamped": Point3(x=400.0, y=0.0, z=0.0),
+    "close_clamped": Point3(x=40.0, y=-57.11, z=-40.0),
+}
+
+
+def main() -> None:
+    fk_cases = []
+    ik_cases = []
+
+    for leg in LEGS:
+        for case_name, angles in FK_ANGLE_CASES.items():
+            foot = forward_kinematics(angles, leg)
+            fk_cases.append(
+                {
+                    "case": f"{leg.name}_{case_name}",
+                    "leg": leg.name,
+                    "coxa_deg": angles.coxa_deg,
+                    "femur_deg": angles.femur_deg,
+                    "tibia_deg": angles.tibia_deg,
+                    "expected_foot": {"x": foot.x, "y": foot.y, "z": foot.z},
+                }
+            )
+
+            # IK(FK(angles)) round trip, same case -- both sides can check
+            # they recover the original angles from their own FK output.
+            recovered = inverse_kinematics(foot, leg)
+            ik_cases.append(
+                {
+                    "case": f"{leg.name}_{case_name}_roundtrip",
+                    "leg": leg.name,
+                    "target": {"x": foot.x, "y": foot.y, "z": foot.z},
+                    "expected_coxa_deg": recovered.coxa_deg,
+                    "expected_femur_deg": recovered.femur_deg,
+                    "expected_tibia_deg": recovered.tibia_deg,
+                }
+            )
+
+        for target_name, target in IK_EXTRA_TARGETS.items():
+            recovered = inverse_kinematics(target, leg)
+            ik_cases.append(
+                {
+                    "case": f"{leg.name}_{target_name}",
+                    "leg": leg.name,
+                    "target": {"x": target.x, "y": target.y, "z": target.z},
+                    "expected_coxa_deg": recovered.coxa_deg,
+                    "expected_femur_deg": recovered.femur_deg,
+                    "expected_tibia_deg": recovered.tibia_deg,
+                }
+            )
+
+    fixture = {
+        "leg_origins": {leg.name: {"x": leg.origin_x_mm, "y": leg.origin_y_mm} for leg in LEGS},
+        "fk_cases": fk_cases,
+        "ik_cases": ik_cases,
+    }
+
+    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    OUT_PATH.write_text(json.dumps(fixture, indent=2) + "\n")
+    print(f"wrote {len(fk_cases)} FK cases and {len(ik_cases)} IK cases to {OUT_PATH}")
+
+
+if __name__ == "__main__":
+    main()

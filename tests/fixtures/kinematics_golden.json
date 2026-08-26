@@ -1,0 +1,824 @@
+{
+  "leg_origins": {
+    "RF": {
+      "x": 100.94,
+      "y": -57.11
+    },
+    "RM": {
+      "x": 0.0,
+      "y": -105.72
+    },
+    "RR": {
+      "x": -100.94,
+      "y": -57.11
+    },
+    "LR": {
+      "x": -100.94,
+      "y": 57.11
+    },
+    "LM": {
+      "x": 0.0,
+      "y": 105.72
+    },
+    "LF": {
+      "x": 100.94,
+      "y": 57.11
+    }
+  },
+  "fk_cases": [
+    {
+      "case": "RF_neutral",
+      "leg": "RF",
+      "coxa_deg": 0.0,
+      "femur_deg": 45.0,
+      "tibia_deg": -90.0,
+      "expected_foot": {
+        "x": 285.8712548926519,
+        "y": -161.74071098592583,
+        "z": -52.50267850310115
+      }
+    },
+    {
+      "case": "RF_coxa_swing",
+      "leg": "RF",
+      "coxa_deg": 20.0,
+      "femur_deg": 45.0,
+      "tibia_deg": -90.0,
+      "expected_foot": {
+        "x": 310.5043463429759,
+        "y": -92.18049271727699,
+        "z": -52.50267850310115
+      }
+    },
+    {
+      "case": "RF_crouched",
+      "leg": "RF",
+      "coxa_deg": -15.0,
+      "femur_deg": -30.0,
+      "tibia_deg": -60.0,
+      "expected_foot": {
+        "x": 181.31900803096005,
+        "y": -136.09929335527607,
+        "z": -203.625
+      }
+    },
+    {
+      "case": "RF_extended",
+      "leg": "RF",
+      "coxa_deg": 10.0,
+      "femur_deg": 60.0,
+      "tibia_deg": -120.0,
+      "expected_foot": {
+        "x": 253.0584084982441,
+        "y": -110.97910451233942,
+        "z": -64.30238623099457
+      }
+    },
+    {
+      "case": "RM_neutral",
+      "leg": "RM",
+      "coxa_deg": 0.0,
+      "femur_deg": 45.0,
+      "tibia_deg": -90.0,
+      "expected_foot": {
+        "x": 1.3010561762185371e-14,
+        "y": -318.19859825778065,
+        "z": -52.50267850310115
+      }
+    },
+    {
+      "case": "RM_coxa_swing",
+      "leg": "RM",
+      "coxa_deg": 20.0,
+      "femur_deg": 45.0,
+      "tibia_deg": -90.0,
+      "expected_foot": {
+        "x": 72.67196062976333,
+        "y": -305.38457085777,
+        "z": -52.50267850310115
+      }
+    },
+    {
+      "case": "RM_crouched",
+      "leg": "RM",
+      "coxa_deg": -15.0,
+      "femur_deg": -30.0,
+      "tibia_deg": -60.0,
+      "expected_foot": {
+        "x": -29.167532332519436,
+        "y": -214.57471259637055,
+        "z": -203.625
+      }
+    },
+    {
+      "case": "RM_extended",
+      "leg": "RM",
+      "coxa_deg": 10.0,
+      "femur_deg": 60.0,
+      "tibia_deg": -120.0,
+      "expected_foot": {
+        "x": 28.0224746710009,
+        "y": -264.64335114234507,
+        "z": -64.30238623099457
+      }
+    },
+    {
+      "case": "RR_neutral",
+      "leg": "RR",
+      "coxa_deg": 0.0,
+      "femur_deg": 45.0,
+      "tibia_deg": -90.0,
+      "expected_foot": {
+        "x": -285.87125489265196,
+        "y": -161.74071098592577,
+        "z": -52.50267850310115
+      }
+    },
+    {
+      "case": "RR_coxa_swing",
+      "leg": "RR",
+      "coxa_deg": 20.0,
+      "femur_deg": 45.0,
+      "tibia_deg": -90.0,
+      "expected_foot": {
+        "x": -238.93272480763,
+        "y": -218.68092132483815,
+        "z": -52.50267850310115
+      }
+    },
+    {
+      "case": "RR_crouched",
+      "leg": "RR",
+      "coxa_deg": -15.0,
+      "femur_deg": -30.0,
+      "tibia_deg": -60.0,
+      "expected_foot": {
+        "x": -210.04490956344284,
+        "y": -85.32723065717039,
+        "z": -203.625
+      }
+    },
+    {
+      "case": "RR_extended",
+      "leg": "RR",
+      "coxa_deg": 10.0,
+      "femur_deg": 60.0,
+      "tibia_deg": -120.0,
+      "expected_foot": {
+        "x": -225.46022710536067,
+        "y": -159.75795987563225,
+        "z": -64.30238623099457
+      }
+    },
+    {
+      "case": "LR_neutral",
+      "leg": "LR",
+      "coxa_deg": 0.0,
+      "femur_deg": 45.0,
+      "tibia_deg": -90.0,
+      "expected_foot": {
+        "x": -285.87125489265196,
+        "y": 161.74071098592577,
+        "z": -52.50267850310115
+      }
+    },
+    {
+      "case": "LR_coxa_swing",
+      "leg": "LR",
+      "coxa_deg": 20.0,
+      "femur_deg": 45.0,
+      "tibia_deg": -90.0,
+      "expected_foot": {
+        "x": -310.5043463429759,
+        "y": 92.18049271727692,
+        "z": -52.50267850310115
+      }
+    },
+    {
+      "case": "LR_crouched",
+      "leg": "LR",
+      "coxa_deg": -15.0,
+      "femur_deg": -30.0,
+      "tibia_deg": -60.0,
+      "expected_foot": {
+        "x": -181.31900803096005,
+        "y": 136.09929335527607,
+        "z": -203.625
+      }
+    },
+    {
+      "case": "LR_extended",
+      "leg": "LR",
+      "coxa_deg": 10.0,
+      "femur_deg": 60.0,
+      "tibia_deg": -120.0,
+      "expected_foot": {
+        "x": -253.0584084982441,
+        "y": 110.97910451233942,
+        "z": -64.30238623099457
+      }
+    },
+    {
+      "case": "LM_neutral",
+      "leg": "LM",
+      "coxa_deg": 0.0,
+      "femur_deg": 45.0,
+      "tibia_deg": -90.0,
+      "expected_foot": {
+        "x": 1.3010561762185371e-14,
+        "y": 318.19859825778065,
+        "z": -52.50267850310115
+      }
+    },
+    {
+      "case": "LM_coxa_swing",
+      "leg": "LM",
+      "coxa_deg": 20.0,
+      "femur_deg": 45.0,
+      "tibia_deg": -90.0,
+      "expected_foot": {
+        "x": -72.6719606297633,
+        "y": 305.38457085777003,
+        "z": -52.50267850310115
+      }
+    },
+    {
+      "case": "LM_crouched",
+      "leg": "LM",
+      "coxa_deg": -15.0,
+      "femur_deg": -30.0,
+      "tibia_deg": -60.0,
+      "expected_foot": {
+        "x": 29.167532332519443,
+        "y": 214.57471259637055,
+        "z": -203.625
+      }
+    },
+    {
+      "case": "LM_extended",
+      "leg": "LM",
+      "coxa_deg": 10.0,
+      "femur_deg": 60.0,
+      "tibia_deg": -120.0,
+      "expected_foot": {
+        "x": -28.022474671000886,
+        "y": 264.64335114234507,
+        "z": -64.30238623099457
+      }
+    },
+    {
+      "case": "LF_neutral",
+      "leg": "LF",
+      "coxa_deg": 0.0,
+      "femur_deg": 45.0,
+      "tibia_deg": -90.0,
+      "expected_foot": {
+        "x": 285.8712548926519,
+        "y": 161.74071098592583,
+        "z": -52.50267850310115
+      }
+    },
+    {
+      "case": "LF_coxa_swing",
+      "leg": "LF",
+      "coxa_deg": 20.0,
+      "femur_deg": 45.0,
+      "tibia_deg": -90.0,
+      "expected_foot": {
+        "x": 238.93272480762994,
+        "y": 218.68092132483815,
+        "z": -52.50267850310115
+      }
+    },
+    {
+      "case": "LF_crouched",
+      "leg": "LF",
+      "coxa_deg": -15.0,
+      "femur_deg": -30.0,
+      "tibia_deg": -60.0,
+      "expected_foot": {
+        "x": 210.04490956344284,
+        "y": 85.32723065717042,
+        "z": -203.625
+      }
+    },
+    {
+      "case": "LF_extended",
+      "leg": "LF",
+      "coxa_deg": 10.0,
+      "femur_deg": 60.0,
+      "tibia_deg": -120.0,
+      "expected_foot": {
+        "x": 225.46022710536062,
+        "y": 159.7579598756323,
+        "z": -64.30238623099457
+      }
+    }
+  ],
+  "ik_cases": [
+    {
+      "case": "RF_neutral_roundtrip",
+      "leg": "RF",
+      "target": {
+        "x": 285.8712548926519,
+        "y": -161.74071098592583,
+        "z": -52.50267850310115
+      },
+      "expected_coxa_deg": -7.664037744326985e-15,
+      "expected_femur_deg": 44.999999999999986,
+      "expected_tibia_deg": -89.99999999999999
+    },
+    {
+      "case": "RF_coxa_swing_roundtrip",
+      "leg": "RF",
+      "target": {
+        "x": 310.5043463429759,
+        "y": -92.18049271727699,
+        "z": -52.50267850310115
+      },
+      "expected_coxa_deg": 20.0,
+      "expected_femur_deg": 44.99999999999997,
+      "expected_tibia_deg": -89.99999999999996
+    },
+    {
+      "case": "RF_crouched_roundtrip",
+      "leg": "RF",
+      "target": {
+        "x": 181.31900803096005,
+        "y": -136.09929335527607,
+        "z": -203.625
+      },
+      "expected_coxa_deg": -14.999999999999996,
+      "expected_femur_deg": -30.000000000000018,
+      "expected_tibia_deg": -59.999999999999986
+    },
+    {
+      "case": "RF_extended_roundtrip",
+      "leg": "RF",
+      "target": {
+        "x": 253.0584084982441,
+        "y": -110.97910451233942,
+        "z": -64.30238623099457
+      },
+      "expected_coxa_deg": 10.000000000000002,
+      "expected_femur_deg": 59.99999999999999,
+      "expected_tibia_deg": -119.99999999999999
+    },
+    {
+      "case": "RF_near",
+      "leg": "RF",
+      "target": {
+        "x": 80.0,
+        "y": -40.0,
+        "z": -40.0
+      },
+      "expected_coxa_deg": 170.24824820890726,
+      "expected_femur_deg": 74.27321044895338,
+      "expected_tibia_deg": -179.81234054730686
+    },
+    {
+      "case": "RF_far_clamped",
+      "leg": "RF",
+      "target": {
+        "x": 400.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "expected_coxa_deg": 40.311708096655465,
+      "expected_femur_deg": 0.2225192013666066,
+      "expected_tibia_deg": -0.34209706307444593
+    },
+    {
+      "case": "RF_close_clamped",
+      "leg": "RF",
+      "target": {
+        "x": 40.0,
+        "y": -57.11,
+        "z": -40.0
+      },
+      "expected_coxa_deg": -150.4996148342932,
+      "expected_femur_deg": 119.4286261184669,
+      "expected_tibia_deg": -179.81234054730686
+    },
+    {
+      "case": "RM_neutral_roundtrip",
+      "leg": "RM",
+      "target": {
+        "x": 1.3010561762185371e-14,
+        "y": -318.19859825778065,
+        "z": -52.50267850310115
+      },
+      "expected_coxa_deg": -4.254395582674034e-31,
+      "expected_femur_deg": 44.99999999999997,
+      "expected_tibia_deg": -89.99999999999996
+    },
+    {
+      "case": "RM_coxa_swing_roundtrip",
+      "leg": "RM",
+      "target": {
+        "x": 72.67196062976333,
+        "y": -305.38457085777,
+        "z": -52.50267850310115
+      },
+      "expected_coxa_deg": 20.000000000000007,
+      "expected_femur_deg": 45.000000000000014,
+      "expected_tibia_deg": -90.00000000000001
+    },
+    {
+      "case": "RM_crouched_roundtrip",
+      "leg": "RM",
+      "target": {
+        "x": -29.167532332519436,
+        "y": -214.57471259637055,
+        "z": -203.625
+      },
+      "expected_coxa_deg": -14.999999999999998,
+      "expected_femur_deg": -30.000000000000018,
+      "expected_tibia_deg": -59.999999999999986
+    },
+    {
+      "case": "RM_extended_roundtrip",
+      "leg": "RM",
+      "target": {
+        "x": 28.0224746710009,
+        "y": -264.64335114234507,
+        "z": -64.30238623099457
+      },
+      "expected_coxa_deg": 10.000000000000004,
+      "expected_femur_deg": 60.00000000000001,
+      "expected_tibia_deg": -120.00000000000001
+    },
+    {
+      "case": "RM_near",
+      "leg": "RM",
+      "target": {
+        "x": 80.0,
+        "y": -40.0,
+        "z": -40.0
+      },
+      "expected_coxa_deg": 129.40310426686483,
+      "expected_femur_deg": 128.36691896633474,
+      "expected_tibia_deg": -170.47702785012262
+    },
+    {
+      "case": "RM_far_clamped",
+      "leg": "RM",
+      "target": {
+        "x": 400.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "expected_coxa_deg": 104.804745226691,
+      "expected_femur_deg": 0.2225192013666066,
+      "expected_tibia_deg": -0.34209706307444593
+    },
+    {
+      "case": "RM_close_clamped",
+      "leg": "RM",
+      "target": {
+        "x": 40.0,
+        "y": -57.11,
+        "z": -40.0
+      },
+      "expected_coxa_deg": 140.54985722384643,
+      "expected_femur_deg": 121.55008803302577,
+      "expected_tibia_deg": -179.81234054730686
+    },
+    {
+      "case": "RR_neutral_roundtrip",
+      "leg": "RR",
+      "target": {
+        "x": -285.87125489265196,
+        "y": -161.74071098592577,
+        "z": -52.50267850310115
+      },
+      "expected_coxa_deg": 0.0,
+      "expected_femur_deg": 44.999999999999986,
+      "expected_tibia_deg": -89.99999999999999
+    },
+    {
+      "case": "RR_coxa_swing_roundtrip",
+      "leg": "RR",
+      "target": {
+        "x": -238.93272480763,
+        "y": -218.68092132483815,
+        "z": -52.50267850310115
+      },
+      "expected_coxa_deg": 20.0,
+      "expected_femur_deg": 44.99999999999997,
+      "expected_tibia_deg": -89.99999999999996
+    },
+    {
+      "case": "RR_crouched_roundtrip",
+      "leg": "RR",
+      "target": {
+        "x": -210.04490956344284,
+        "y": -85.32723065717039,
+        "z": -203.625
+      },
+      "expected_coxa_deg": -15.000000000000002,
+      "expected_femur_deg": -30.000000000000018,
+      "expected_tibia_deg": -59.999999999999986
+    },
+    {
+      "case": "RR_extended_roundtrip",
+      "leg": "RR",
+      "target": {
+        "x": -225.46022710536067,
+        "y": -159.75795987563225,
+        "z": -64.30238623099457
+      },
+      "expected_coxa_deg": 9.999999999999991,
+      "expected_femur_deg": 59.99999999999999,
+      "expected_tibia_deg": -119.99999999999999
+    },
+    {
+      "case": "RR_near",
+      "leg": "RR",
+      "target": {
+        "x": 80.0,
+        "y": -40.0,
+        "z": -40.0
+      },
+      "expected_coxa_deg": 155.9015400662466,
+      "expected_femur_deg": 65.63991341090265,
+      "expected_tibia_deg": -113.26595911886798
+    },
+    {
+      "case": "RR_far_clamped",
+      "leg": "RR",
+      "target": {
+        "x": 400.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "expected_coxa_deg": 157.0035775630925,
+      "expected_femur_deg": 0.2225192013666066,
+      "expected_tibia_deg": -0.34209706307444593
+    },
+    {
+      "case": "RR_close_clamped",
+      "leg": "RR",
+      "target": {
+        "x": 40.0,
+        "y": -57.11,
+        "z": -40.0
+      },
+      "expected_coxa_deg": 150.4996148342932,
+      "expected_femur_deg": 87.51799892059518,
+      "expected_tibia_deg": -139.34054969425202
+    },
+    {
+      "case": "LR_neutral_roundtrip",
+      "leg": "LR",
+      "target": {
+        "x": -285.87125489265196,
+        "y": 161.74071098592577,
+        "z": -52.50267850310115
+      },
+      "expected_coxa_deg": 0.0,
+      "expected_femur_deg": 44.999999999999986,
+      "expected_tibia_deg": -89.99999999999999
+    },
+    {
+      "case": "LR_coxa_swing_roundtrip",
+      "leg": "LR",
+      "target": {
+        "x": -310.5043463429759,
+        "y": 92.18049271727692,
+        "z": -52.50267850310115
+      },
+      "expected_coxa_deg": 20.000000000000007,
+      "expected_femur_deg": 44.999999999999986,
+      "expected_tibia_deg": -89.99999999999999
+    },
+    {
+      "case": "LR_crouched_roundtrip",
+      "leg": "LR",
+      "target": {
+        "x": -181.31900803096005,
+        "y": 136.09929335527607,
+        "z": -203.625
+      },
+      "expected_coxa_deg": -15.000000000000009,
+      "expected_femur_deg": -30.000000000000018,
+      "expected_tibia_deg": -59.999999999999986
+    },
+    {
+      "case": "LR_extended_roundtrip",
+      "leg": "LR",
+      "target": {
+        "x": -253.0584084982441,
+        "y": 110.97910451233942,
+        "z": -64.30238623099457
+      },
+      "expected_coxa_deg": 9.999999999999991,
+      "expected_femur_deg": 59.99999999999997,
+      "expected_tibia_deg": -119.99999999999997
+    },
+    {
+      "case": "LR_near",
+      "leg": "LR",
+      "target": {
+        "x": 80.0,
+        "y": -40.0,
+        "z": -40.0
+      },
+      "expected_coxa_deg": -178.72194773726508,
+      "expected_femur_deg": 54.20987847099749,
+      "expected_tibia_deg": -97.45550782563544
+    },
+    {
+      "case": "LR_far_clamped",
+      "leg": "LR",
+      "target": {
+        "x": 400.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "expected_coxa_deg": -157.0035775630925,
+      "expected_femur_deg": 0.2225192013666066,
+      "expected_tibia_deg": -0.34209706307444593
+    },
+    {
+      "case": "LR_close_clamped",
+      "leg": "LR",
+      "target": {
+        "x": 40.0,
+        "y": -57.11,
+        "z": -40.0
+      },
+      "expected_coxa_deg": 170.47853088439848,
+      "expected_femur_deg": 65.80333843611702,
+      "expected_tibia_deg": -113.48298955940554
+    },
+    {
+      "case": "LM_neutral_roundtrip",
+      "leg": "LM",
+      "target": {
+        "x": 1.3010561762185371e-14,
+        "y": 318.19859825778065,
+        "z": -52.50267850310115
+      },
+      "expected_coxa_deg": 4.254395582674034e-31,
+      "expected_femur_deg": 44.99999999999997,
+      "expected_tibia_deg": -89.99999999999996
+    },
+    {
+      "case": "LM_coxa_swing_roundtrip",
+      "leg": "LM",
+      "target": {
+        "x": -72.6719606297633,
+        "y": 305.38457085777003,
+        "z": -52.50267850310115
+      },
+      "expected_coxa_deg": 20.0,
+      "expected_femur_deg": 44.99999999999997,
+      "expected_tibia_deg": -89.99999999999996
+    },
+    {
+      "case": "LM_crouched_roundtrip",
+      "leg": "LM",
+      "target": {
+        "x": 29.167532332519443,
+        "y": 214.57471259637055,
+        "z": -203.625
+      },
+      "expected_coxa_deg": -14.999999999999996,
+      "expected_femur_deg": -30.000000000000018,
+      "expected_tibia_deg": -59.999999999999986
+    },
+    {
+      "case": "LM_extended_roundtrip",
+      "leg": "LM",
+      "target": {
+        "x": -28.022474671000886,
+        "y": 264.64335114234507,
+        "z": -64.30238623099457
+      },
+      "expected_coxa_deg": 10.000000000000005,
+      "expected_femur_deg": 60.00000000000001,
+      "expected_tibia_deg": -120.00000000000001
+    },
+    {
+      "case": "LM_near",
+      "leg": "LM",
+      "target": {
+        "x": 80.0,
+        "y": -40.0,
+        "z": -40.0
+      },
+      "expected_coxa_deg": -151.23329850959695,
+      "expected_femur_deg": 73.3603733518519,
+      "expected_tibia_deg": -123.1874801634407
+    },
+    {
+      "case": "LM_far_clamped",
+      "leg": "LM",
+      "target": {
+        "x": 400.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "expected_coxa_deg": -104.804745226691,
+      "expected_femur_deg": 0.2225192013666066,
+      "expected_tibia_deg": -0.34209706307444593
+    },
+    {
+      "case": "LM_close_clamped",
+      "leg": "LM",
+      "target": {
+        "x": 40.0,
+        "y": -57.11,
+        "z": -40.0
+      },
+      "expected_coxa_deg": -166.19830225661994,
+      "expected_femur_deg": 72.62778562312967,
+      "expected_tibia_deg": -122.27673662105633
+    },
+    {
+      "case": "LF_neutral_roundtrip",
+      "leg": "LF",
+      "target": {
+        "x": 285.8712548926519,
+        "y": 161.74071098592583,
+        "z": -52.50267850310115
+      },
+      "expected_coxa_deg": 7.664037744326985e-15,
+      "expected_femur_deg": 44.999999999999986,
+      "expected_tibia_deg": -89.99999999999999
+    },
+    {
+      "case": "LF_coxa_swing_roundtrip",
+      "leg": "LF",
+      "target": {
+        "x": 238.93272480762994,
+        "y": 218.68092132483815,
+        "z": -52.50267850310115
+      },
+      "expected_coxa_deg": 20.000000000000004,
+      "expected_femur_deg": 44.999999999999986,
+      "expected_tibia_deg": -89.99999999999999
+    },
+    {
+      "case": "LF_crouched_roundtrip",
+      "leg": "LF",
+      "target": {
+        "x": 210.04490956344284,
+        "y": 85.32723065717042,
+        "z": -203.625
+      },
+      "expected_coxa_deg": -15.000000000000002,
+      "expected_femur_deg": -30.000000000000018,
+      "expected_tibia_deg": -59.999999999999986
+    },
+    {
+      "case": "LF_extended_roundtrip",
+      "leg": "LF",
+      "target": {
+        "x": 225.46022710536062,
+        "y": 159.7579598756323,
+        "z": -64.30238623099457
+      },
+      "expected_coxa_deg": 10.000000000000002,
+      "expected_femur_deg": 59.99999999999999,
+      "expected_tibia_deg": -119.99999999999999
+    },
+    {
+      "case": "LF_near",
+      "leg": "LF",
+      "target": {
+        "x": 80.0,
+        "y": -40.0,
+        "z": -40.0
+      },
+      "expected_coxa_deg": -131.668858614562,
+      "expected_femur_deg": 146.48672311969614,
+      "expected_tibia_deg": -179.81234054730686
+    },
+    {
+      "case": "LF_far_clamped",
+      "leg": "LF",
+      "target": {
+        "x": 400.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "expected_coxa_deg": -40.311708096655465,
+      "expected_femur_deg": 0.2225192013666066,
+      "expected_tibia_deg": -0.34209706307444593
+    },
+    {
+      "case": "LF_close_clamped",
+      "leg": "LF",
+      "target": {
+        "x": 40.0,
+        "y": -57.11,
+        "z": -40.0
+      },
+      "expected_coxa_deg": -147.58172360458116,
+      "expected_femur_deg": 95.40816345691287,
+      "expected_tibia_deg": -147.05604074603468
+    }
+  ]
+}
