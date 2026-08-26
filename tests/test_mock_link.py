@@ -4,12 +4,17 @@ import pytest
 
 from transport.mock_link import MockRobotLink
 from transport.protocol import (
+    BenchHealthNoteCommand,
+    BenchModeCommand,
+    BenchPulseCommand,
     CalibrateCommand,
     CalibrationModeCommand,
     FAULT_LINK_TIMEOUT,
+    LimitBound,
     PingCommand,
     ReadOffsetsCommand,
-    ServoOffset,
+    RecordLimitCommand,
+    ServoProfile,
     StopCommand,
     WalkCommand,
     WriteOffsetsCommand,
@@ -59,6 +64,15 @@ def test_last_applied_reflects_motion_commands():
     assert link.latest_telemetry().last_applied == WalkCommand(vx=0.4, vy=-0.1, speed=20)
     link.send(StopCommand())
     assert link.latest_telemetry().last_applied == StopCommand()
+
+
+def test_bench_pulse_and_record_limit_do_not_touch_last_applied():
+    link = MockRobotLink()
+    link.send(WalkCommand(vx=0.4, vy=-0.1, speed=20))
+    link.send(BenchModeCommand(armed=True))
+    link.send(BenchPulseCommand(board=0x40, channel=0, pulse_us=1500))
+    link.send(RecordLimitCommand(servo_index=0, bound=LimitBound.MIN, pulse_us=1000))
+    assert link.latest_telemetry().last_applied == WalkCommand(vx=0.4, vy=-0.1, speed=20)
 
 
 def test_calibrate_rejected_when_not_armed():
@@ -118,12 +132,13 @@ def test_calibrate_while_armed_refreshes_arm_window():
     assert link.latest_telemetry().ok is True
 
 
-def test_read_offsets_defaults_to_zero_and_sign_one():
+def test_read_offsets_defaults_to_zero_sign_one_and_no_recorded_limits():
     link = MockRobotLink()
     link.send(ReadOffsetsCommand())
-    offsets = link.latest_telemetry().offsets
-    assert len(offsets) == 18
-    assert all(o.offset_us == 0 and o.sign == 1 for o in offsets)
+    profiles = link.latest_telemetry().profiles
+    assert len(profiles) == 18
+    assert all(p.offset_us == 0 and p.sign == 1 for p in profiles)
+    assert all(p.min_pulse_us is None and p.max_pulse_us is None for p in profiles)
 
 
 def test_read_offsets_always_allowed_even_unarmed():
@@ -137,22 +152,139 @@ def test_write_offsets_round_trips_through_read():
     link.send(CalibrationModeCommand(armed=True))
     link.send(
         WriteOffsetsCommand(
-            offsets=[ServoOffset(0, -50, -1), ServoOffset(4, 30, 1)]
+            offsets=[ServoProfile(0, -50, -1), ServoProfile(4, 30, 1)]
         )
     )
     link.send(ReadOffsetsCommand())
-    offsets = link.latest_telemetry().offsets
-    assert offsets[0] == ServoOffset(0, -50, -1)
-    assert offsets[4] == ServoOffset(4, 30, 1)
-    assert offsets[1] == ServoOffset(1, 0, 1)  # untouched entries keep defaults
+    profiles = link.latest_telemetry().profiles
+    assert profiles[0].offset_us == -50 and profiles[0].sign == -1
+    assert profiles[4].offset_us == 30 and profiles[4].sign == 1
+    assert profiles[1].offset_us == 0 and profiles[1].sign == 1  # untouched entries keep defaults
 
 
 def test_write_offsets_rejected_when_not_armed():
     link = MockRobotLink()
-    link.send(WriteOffsetsCommand(offsets=[ServoOffset(0, 1, 1)]))
+    link.send(WriteOffsetsCommand(offsets=[ServoProfile(0, 1, 1)]))
     telemetry = link.latest_telemetry()
     assert telemetry.ok is False
     assert telemetry.error == "calibration not armed"
+
+
+# --- bench mode --------------------------------------------------------
+
+
+def test_bench_pulse_rejected_when_not_armed():
+    link = MockRobotLink()
+    link.send(BenchPulseCommand(board=0x40, channel=0, pulse_us=1500))
+    telemetry = link.latest_telemetry()
+    assert telemetry.ok is False
+    assert telemetry.error == "bench mode not armed"
+
+
+def test_bench_pulse_accepted_when_armed():
+    link = MockRobotLink()
+    link.send(BenchModeCommand(armed=True))
+    link.send(BenchPulseCommand(board=0x40, channel=0, pulse_us=1500))
+    assert link.latest_telemetry().ok is True
+
+
+def test_bench_mode_independent_of_calibration_mode():
+    """Arming one gate must not arm or disarm the other."""
+    link = MockRobotLink()
+    link.send(CalibrationModeCommand(armed=True))
+    assert link.latest_telemetry().calibration_armed is True
+    assert link.latest_telemetry().bench_armed is False
+
+    link.send(BenchPulseCommand(board=0x40, channel=0, pulse_us=1500))
+    assert link.latest_telemetry().ok is False  # calibration armed doesn't imply bench armed
+
+    link.send(BenchModeCommand(armed=True))
+    assert link.latest_telemetry().calibration_armed is True
+    assert link.latest_telemetry().bench_armed is True
+
+
+def test_bench_auto_disarms_after_timeout():
+    link = MockRobotLink(bench_arm_timeout_s=0.05)
+    link.send(BenchModeCommand(armed=True))
+    assert link.latest_telemetry().bench_armed is True
+
+    time.sleep(0.1)
+    link.send(PingCommand())
+    assert link.latest_telemetry().bench_armed is False
+
+    link.send(BenchPulseCommand(board=0x40, channel=0, pulse_us=1500))
+    assert link.latest_telemetry().ok is False
+
+
+def test_record_limit_rejected_when_bench_not_armed():
+    link = MockRobotLink()
+    link.send(RecordLimitCommand(servo_index=0, bound=LimitBound.MIN, pulse_us=1000))
+    telemetry = link.latest_telemetry()
+    assert telemetry.ok is False
+    assert telemetry.error == "bench mode not armed"
+
+
+def test_record_limit_round_trips_through_read():
+    link = MockRobotLink()
+    link.send(BenchModeCommand(armed=True))
+    link.send(RecordLimitCommand(servo_index=6, bound=LimitBound.MIN, pulse_us=950))
+    link.send(RecordLimitCommand(servo_index=6, bound=LimitBound.MAX, pulse_us=2050))
+    link.send(ReadOffsetsCommand())
+    profile = link.latest_telemetry().profiles[6]
+    assert profile.min_pulse_us == 950
+    assert profile.max_pulse_us == 2050
+
+
+def test_record_limit_rejects_min_at_or_past_existing_max():
+    link = MockRobotLink()
+    link.send(BenchModeCommand(armed=True))
+    link.send(RecordLimitCommand(servo_index=0, bound=LimitBound.MAX, pulse_us=2000))
+    link.send(RecordLimitCommand(servo_index=0, bound=LimitBound.MIN, pulse_us=2000))
+    telemetry = link.latest_telemetry()
+    assert telemetry.ok is False
+    assert "must be <" in telemetry.error
+
+
+def test_calibrate_write_preserves_bench_recorded_limits_and_note():
+    """A calibrate/write_offsets write must never wipe out limits or a
+    health note already recorded for that servo by bench testing."""
+    link = MockRobotLink()
+    link.send(BenchModeCommand(armed=True))
+    link.send(RecordLimitCommand(servo_index=5, bound=LimitBound.MIN, pulse_us=950))
+    link.send(RecordLimitCommand(servo_index=5, bound=LimitBound.MAX, pulse_us=2050))
+    link.send(BenchHealthNoteCommand(servo_index=5, note="slight buzz near max"))
+
+    link.send(CalibrationModeCommand(armed=True))
+    link.send(CalibrateCommand(servo_index=5, offset_us=30, sign=-1))
+
+    link.send(ReadOffsetsCommand())
+    profile = link.latest_telemetry().profiles[5]
+    assert profile.offset_us == 30
+    assert profile.sign == -1
+    assert profile.min_pulse_us == 950
+    assert profile.max_pulse_us == 2050
+    assert profile.note == "slight buzz near max"
+
+
+def test_bench_health_note_not_gated_by_bench_armed():
+    link = MockRobotLink()
+    link.send(BenchHealthNoteCommand(servo_index=3, note="dead"))
+    assert link.latest_telemetry().ok is True
+
+    link.send(ReadOffsetsCommand())
+    assert link.latest_telemetry().profiles[3].note == "dead"
+
+
+def test_bench_pulse_refreshes_bench_arm_window():
+    link = MockRobotLink(bench_arm_timeout_s=0.2)
+    link.send(BenchModeCommand(armed=True))
+    time.sleep(0.1)
+    link.send(BenchPulseCommand(board=0x40, channel=0, pulse_us=1500))  # refreshes window
+    time.sleep(0.15)
+    # Total elapsed since arm is 0.25s (> 0.2s timeout), but only 0.15s
+    # since the refresh -- should still be armed.
+    link.send(BenchPulseCommand(board=0x40, channel=0, pulse_us=1600))
+    assert link.latest_telemetry().ok is True
 
 
 def test_set_fault_reflected_in_telemetry():

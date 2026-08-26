@@ -2,16 +2,24 @@ import pytest
 
 from transport.generated_constants import PROTOCOL_VERSION, SEQUENCE_MODULUS
 from transport.protocol import (
+    BENCH_PULSE_MAX_US,
+    BENCH_PULSE_MIN_US,
+    BenchHealthNoteCommand,
+    BenchModeCommand,
+    BenchPulseCommand,
     BodyHeightCommand,
     CalibrateCommand,
     CalibrationModeCommand,
     FaceCommand,
+    HEALTH_NOTE_MAX_LEN,
+    LimitBound,
     Mood,
     PanTiltCommand,
     PingCommand,
     ProtocolError,
     ReadOffsetsCommand,
-    ServoOffset,
+    RecordLimitCommand,
+    ServoProfile,
     StopCommand,
     Telemetry,
     TurnCommand,
@@ -37,7 +45,13 @@ ROUND_TRIP_COMMANDS = [
     CalibrateCommand(servo_index=17, offset_us=-500, sign=-1),
     CalibrationModeCommand(armed=True),
     ReadOffsetsCommand(),
-    WriteOffsetsCommand(offsets=[ServoOffset(0, 10, 1), ServoOffset(5, -20, -1)]),
+    WriteOffsetsCommand(offsets=[ServoProfile(0, 10, 1), ServoProfile(5, -20, -1)]),
+    BenchModeCommand(armed=True),
+    BenchPulseCommand(board=0x40, channel=0, pulse_us=1500),
+    BenchPulseCommand(board=0x41, channel=15, pulse_us=BENCH_PULSE_MAX_US),
+    RecordLimitCommand(servo_index=3, bound=LimitBound.MIN, pulse_us=900),
+    RecordLimitCommand(servo_index=3, bound=LimitBound.MAX, pulse_us=2100),
+    BenchHealthNoteCommand(servo_index=9, note="buzzes at low end"),
     PingCommand(),
 ]
 
@@ -60,8 +74,12 @@ def test_telemetry_round_trip_full():
         rail_mv=5950,
         link_timeout_s=1.0,
         calibration_armed=True,
+        bench_armed=False,
         last_applied=WalkCommand(vx=0.1, vy=0.2, speed=10.0),
-        offsets=(ServoOffset(0, 5, 1), ServoOffset(1, -5, -1)),
+        profiles=(
+            ServoProfile(0, 5, 1, 900, 2100, "buzzes at low end"),
+            ServoProfile(1, -5, -1),
+        ),
     )
     decoded = decode_telemetry(encode_telemetry(telemetry))
     assert decoded == telemetry
@@ -77,11 +95,22 @@ def test_telemetry_round_trip_minimal():
         rail_mv=None,
         link_timeout_s=1.0,
         calibration_armed=False,
+        bench_armed=False,
         last_applied=None,
-        offsets=None,
+        profiles=None,
     )
     decoded = decode_telemetry(encode_telemetry(telemetry))
     assert decoded == telemetry
+
+
+# --- write_offsets stays scoped to offset/sign, never limits/notes --------
+
+
+def test_write_offsets_wire_fields_exclude_limits_and_note():
+    profile = ServoProfile(0, offset_us=10, sign=-1, min_pulse_us=900, max_pulse_us=2100, note="hi")
+    command = WriteOffsetsCommand(offsets=[profile])
+    fields = command._wire_fields()
+    assert fields == {"offsets": [{"servo_index": 0, "offset_us": 10, "sign": -1}]}
 
 
 # --- Range validation ----------------------------------------------------
@@ -103,7 +132,22 @@ def test_telemetry_round_trip_minimal():
         lambda: CalibrateCommand(servo_index=-1, offset_us=0),
         lambda: CalibrateCommand(servo_index=0, offset_us=501),
         lambda: CalibrateCommand(servo_index=0, offset_us=0, sign=0),
-        lambda: ServoOffset(servo_index=18, offset_us=0),
+        lambda: ServoProfile(servo_index=18, offset_us=0),
+        lambda: ServoProfile(servo_index=0, min_pulse_us=1600, max_pulse_us=1400),
+        lambda: ServoProfile(servo_index=0, min_pulse_us=1500, max_pulse_us=1500),
+        lambda: ServoProfile(servo_index=0, min_pulse_us=BENCH_PULSE_MIN_US - 1),
+        lambda: ServoProfile(servo_index=0, max_pulse_us=BENCH_PULSE_MAX_US + 1),
+        lambda: ServoProfile(servo_index=0, note="x" * (HEALTH_NOTE_MAX_LEN + 1)),
+        lambda: BenchModeCommand(armed="yes"),
+        lambda: BenchPulseCommand(board=0x42, channel=0, pulse_us=1500),
+        lambda: BenchPulseCommand(board=0x40, channel=16, pulse_us=1500),
+        lambda: BenchPulseCommand(board=0x40, channel=0, pulse_us=BENCH_PULSE_MIN_US - 1),
+        lambda: BenchPulseCommand(board=0x40, channel=0, pulse_us=BENCH_PULSE_MAX_US + 1),
+        lambda: RecordLimitCommand(servo_index=18, bound=LimitBound.MIN, pulse_us=1500),
+        lambda: RecordLimitCommand(servo_index=0, bound="min", pulse_us=1500),
+        lambda: RecordLimitCommand(servo_index=0, bound=LimitBound.MIN, pulse_us=100),
+        lambda: BenchHealthNoteCommand(servo_index=18, note="x"),
+        lambda: BenchHealthNoteCommand(servo_index=0, note="x" * (HEALTH_NOTE_MAX_LEN + 1)),
     ],
 )
 def test_out_of_range_construction_rejected(factory):
@@ -117,6 +161,16 @@ def test_boundary_values_are_accepted():
     CalibrateCommand(servo_index=0, offset_us=-500, sign=-1)
     CalibrateCommand(servo_index=17, offset_us=500, sign=1)
     PanTiltCommand(pan=-90.0, tilt=90.0)
+    ServoProfile(servo_index=0, min_pulse_us=BENCH_PULSE_MIN_US, max_pulse_us=BENCH_PULSE_MAX_US)
+    BenchPulseCommand(board=0x40, channel=0, pulse_us=BENCH_PULSE_MIN_US)
+    BenchPulseCommand(board=0x41, channel=15, pulse_us=BENCH_PULSE_MAX_US)
+
+
+def test_servo_profile_limits_default_to_none_not_a_fake_value():
+    profile = ServoProfile(servo_index=0)
+    assert profile.min_pulse_us is None
+    assert profile.max_pulse_us is None
+    assert profile.note == ""
 
 
 def test_walk_rejects_nan_and_infinity():
@@ -143,12 +197,12 @@ def test_write_offsets_rejects_empty():
 
 def test_write_offsets_rejects_duplicate_servo_index():
     with pytest.raises(ProtocolError):
-        WriteOffsetsCommand(offsets=[ServoOffset(0, 1, 1), ServoOffset(0, 2, 1)])
+        WriteOffsetsCommand(offsets=[ServoProfile(0, 1, 1), ServoProfile(0, 2, 1)])
 
 
 def test_write_offsets_rejects_too_many_entries():
     with pytest.raises(ProtocolError):
-        WriteOffsetsCommand(offsets=[ServoOffset(i, 0, 1) for i in range(18)] + [ServoOffset(0, 1, 1)])
+        WriteOffsetsCommand(offsets=[ServoProfile(i, 0, 1) for i in range(18)] + [ServoProfile(0, 1, 1)])
 
 
 def test_face_rejects_non_mood():
@@ -213,8 +267,26 @@ def test_decode_rejects_bool_as_armed():
         decode_command(payload)
 
 
+def test_decode_rejects_unknown_limit_bound():
+    payload = (
+        f'{{"v":{PROTOCOL_VERSION},"seq":0,"type":"record_limit",'
+        f'"servo_index":0,"bound":"sideways","pulse_us":1500}}'
+    ).encode()
+    with pytest.raises(ProtocolError):
+        decode_command(payload)
+
+
 def test_decode_telemetry_rejects_missing_field():
     payload = f'{{"v":{PROTOCOL_VERSION},"seq_echo":0,"ok":true}}'.encode()
+    with pytest.raises(ProtocolError):
+        decode_telemetry(payload)
+
+
+def test_decode_telemetry_rejects_missing_bench_armed():
+    payload = (
+        f'{{"v":{PROTOCOL_VERSION},"seq_echo":0,"ok":true,"fault_flags":0,'
+        f'"link_timeout_s":1.0,"calibration_armed":false}}'
+    ).encode()
     with pytest.raises(ProtocolError):
         decode_telemetry(payload)
 
@@ -222,7 +294,7 @@ def test_decode_telemetry_rejects_missing_field():
 def test_decode_telemetry_rejects_out_of_range_gait_phase():
     payload = (
         f'{{"v":{PROTOCOL_VERSION},"seq_echo":0,"ok":true,"fault_flags":0,'
-        f'"link_timeout_s":1.0,"calibration_armed":false,"gait_phase":1.5}}'
+        f'"link_timeout_s":1.0,"calibration_armed":false,"bench_armed":false,"gait_phase":1.5}}'
     ).encode()
     with pytest.raises(ProtocolError):
         decode_telemetry(payload)
