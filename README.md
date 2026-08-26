@@ -1,10 +1,13 @@
 # hexapod-cv
 
 Vision and control pipeline for a hexapod robot: wireless camera ingest,
-color-based object detection, and an operator GUI for manual/auto-track
-driving and servo calibration. No robot hardware is assembled yet — every
+color-based object detection, an operator GUI for manual/auto-track
+driving and servo calibration, and ESP32-S3 firmware for bench-testing
+loose servos before assembly. No robot is assembled yet — every PC-side
 piece runs and is tested against mocks (`MockRobotLink`) with no camera or
-robot attached.
+robot attached, and the firmware's safety-relevant logic (link watchdog,
+arm gates, dwell protection, limit enforcement) is unit tested on the host
+with no hardware either.
 
 ![demo placeholder](docs/demo.gif)
 <!-- TODO: replace with a real screenshot or GIF of the live viewer -->
@@ -32,6 +35,13 @@ robot attached.
   its own arm gate, stall/dwell protection (`control/bench.py`) — all of
   it runs fully against `MockRobotLink` with no camera and no robot
   attached
+- ESP32-S3 firmware (`firmware/`, PlatformIO) implementing the
+  bench-testing subset of the protocol: link watchdog, both arm gates,
+  per-channel dwell protection, and limit enforcement that's impossible to
+  bypass from any command path (`GatedServoDriver`) — no gait/IK yet,
+  nothing is assembled. WiFi with AP fallback, OTA updates gated on
+  nothing being armed, a plain-text serial mirror for bench testing
+  without WiFi. See `docs/protocol.md` and `docs/HOW_TO_USE.md`
 
 ## Tech stack
 
@@ -41,6 +51,8 @@ robot attached.
 - PySide6 (operator GUI)
 - PyYAML (config)
 - pytest
+- ESP32-S3, C++/PlatformIO, ArduinoJson, Adafruit PWM Servo Driver
+  Library, Unity (firmware host-side tests)
 
 ## Installation
 
@@ -112,6 +124,19 @@ See [docs/GUI_GUIDE.md](docs/GUI_GUIDE.md) for what every control does,
 cable connected), and [docs/protocol.md](docs/protocol.md) for the wire
 protocol this all runs over.
 
+Build and test the firmware (no ESP32-S3 hardware required for the tests):
+
+```bash
+cd firmware
+pio test -e native          # host-side Unity tests for the safety-relevant logic
+pio run -e esp32-s3-devkitc-1   # cross-compile for the real target
+```
+
+Flashing requires `firmware/include/secrets.h` (copy from
+`secrets.h.example`, gitignored) with your WiFi/AP/OTA credentials filled
+in — see `docs/HOW_TO_USE.md` Section 1 for the full first-time bring-up
+and OTA reflashing procedure.
+
 ## Project structure
 
 ```
@@ -143,7 +168,14 @@ hexapod-cv/
 │   ├── bench_tab.py                # raw-pulse bench testing: park/sweep/range-finder
 │   ├── log_panel.py                 # scrolling command/event log
 │   └── servo_names.py                # servo_index -> leg/joint name for calibration/bench tabs
-├── reference/               # ported firmware + critical analysis (ANALYSIS.md)
+├── reference/               # ported reference firmware + critical analysis (ANALYSIS.md)
+├── firmware/                # ESP32-S3 firmware (PlatformIO) -- bench-testing subset of the protocol
+│   ├── platformio.ini         # native (host tests) + esp32-s3-devkitc-1 (real target) environments
+│   ├── include/                 # Config.h, generated constants, secrets.h.example
+│   ├── lib/core/                  # pure logic: watchdog, arm gates, dwell guard, protocol codec,
+│   │                                 gated servo driver -- unit tested on the host, no hardware
+│   ├── src/                        # ESP32-only: PCA9685/NVS/WiFi/OTA drivers, main.cpp wiring
+│   └── test/                        # Unity tests for lib/core, run via `pio test -e native`
 ├── docs/
 │   ├── protocol.md           # wire protocol design and rationale
 │   ├── GUI_GUIDE.md           # what every app control does
@@ -157,16 +189,31 @@ hexapod-cv/
   behave differently.
 - HSV thresholding is sensitive to lighting changes — re-run `tune_hsv.py`
   whenever the environment changes.
-- No ESP32-S3 firmware yet — the protocol, GUI, and `MockRobotLink` are
-  all built and tested, but nothing has run against real servos. See
-  `reference/ANALYSIS.md` Section 7 for the planned firmware architecture.
+- Firmware has never run against real servos or a real PCA9685 board —
+  verified by real cross-compilation for the target and by host-side unit
+  tests, not by physical hardware, which no session so far has had access
+  to. `firmware/include/Config.h`'s `PCA9685_OSC_FREQ_BOARD_*_HZ` are
+  nominal placeholders until measured per-board (procedure in
+  `docs/HOW_TO_USE.md`).
+- No gait/IK yet — firmware decodes and acknowledges `walk`/`turn`/`stop`/
+  `body_height`/`pan_tilt`/`face`, but they have no hardware effect.
+  Nothing is assembled yet for them to act on. See `reference/ANALYSIS.md`
+  Section 7 for the planned architecture once that phase starts.
 - The calibration and bench tabs' auto-disarm countdowns are client-side
   estimates, not wire-verified — accurate for how `app.py` constructs a
   link, would drift against a link built with a non-default arm timeout.
-- Bench mode's stall/dwell protection is enforced by the GUI, not by
-  firmware (which doesn't exist yet) — real accident-proofing needs the
-  firmware's gait engine and bench mode to be mutually exclusive too. See
-  `docs/protocol.md` Section 8.
+- `MockRobotLink` re-arms `calibration_mode`/`bench_mode` on every
+  received `armed=True`, including transport resends — firmware instead
+  only arms on the false→true transition, since otherwise an idle-but-
+  armed session with a healthy link would never auto-disarm. Known
+  discrepancy, not yet fixed on the PC side. See `docs/protocol.md`
+  Section 6.
+- Bench mode's stall/dwell protection is now enforced independently by
+  both the GUI and firmware (firmware releases the channel entirely
+  rather than moving it to neutral, and works even if the GUI has
+  crashed) — real accident-proofing still needs the firmware's future
+  gait engine and bench mode to be mutually exclusive too, once that
+  exists. See `docs/protocol.md` Section 8.
 - `stream/` is named that way (not `io/`) to avoid shadowing Python's
   standard-library `io` module when the project root is on `sys.path`.
 
