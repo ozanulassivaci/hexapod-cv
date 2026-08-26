@@ -72,6 +72,41 @@ locomotion tying detection output to robot commands.
 - MIT-licensed reference firmware (see below) may be ported and republished
   with attribution to Emre Kalem
 
+## Documentation map
+
+- `docs/GUI_GUIDE.md` — what every control in the app does, written for
+  someone who has never seen the codebase
+- `docs/HOW_TO_USE.md` — physical workflows and order of operations
+  (flashing, bench testing, calibration, driving, shutdown) and the safety
+  rules around them
+- `docs/protocol.md` — wire format and command reference
+- `reference/ANALYSIS.md` — assessment of the ported reference firmware
+
+## Keeping docs in sync
+
+`GUI_GUIDE.md` and `HOW_TO_USE.md` are part of the deliverable, not
+optional follow-up. In any session where you do one of the following,
+update the affected doc in the same session, in the same logical commit as
+the change:
+
+- add, remove or rename a control, tab, keybinding or slider
+- change what an existing control does, or the units/range it operates in
+- add or change a physical procedure, wiring step, or power-sequencing step
+- change anything safety-relevant: limits, timeouts, arming behavior,
+  failsafe conditions, or anything that could damage a servo or the laptop
+- add a concept the user would need explained (as offsets and arming were)
+
+Two hard requirements:
+1. Never leave a doc describing behavior that no longer exists. A stale
+   safety instruction is worse than no instruction.
+2. At the end of every session, state explicitly which docs you updated
+   and why — or state that no doc change was needed and why not. Do not
+   leave this implicit.
+
+Keep the writing style consistent with what's already there: plain
+language, short sentences, numbered steps, written for a tired reader
+working late.
+
 ## Reference code
 
 `reference/Hexapod_Arduino.ino` and `reference/Controller_Arduino_Code.ino`
