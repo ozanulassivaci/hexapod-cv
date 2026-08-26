@@ -277,7 +277,7 @@ class MainWindow(QMainWindow):
         self.control_panel.set_camera_connected(self.stream.is_connected)
 
         if self._mode == Mode.AUTO_TRACK:
-            self._drive_auto_track(detections)
+            self._drive_auto_track(detections, now)
 
         telemetry = self.link.latest_telemetry()
         self._refresh_rtt(telemetry)
@@ -289,13 +289,13 @@ class MainWindow(QMainWindow):
         if self.sim_view is not None:
             self.sim_view.tick()
 
-    def _drive_auto_track(self, detections) -> None:
+    def _drive_auto_track(self, detections, now: float) -> None:
         has_target = bool(detections)
         if has_target != self._auto_track_has_target:
             self.log_panel.log("AUTO_TRACK: target acquired" if has_target else "AUTO_TRACK: target lost")
             self._auto_track_has_target = has_target
 
-        command = self.tracker.decide(detections)
+        command = self.tracker.decide(detections, now)
         self.link.send(command)
         self.control_panel.set_current_intent(command)
         # Not logged per-tick (would be dozens of lines/sec) -- the current

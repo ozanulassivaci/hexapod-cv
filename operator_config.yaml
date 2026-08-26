@@ -27,6 +27,7 @@ tracker:
   dead_zone: 0.1
   turn_gain: 0.8
   turn_speed: 30.0
+  lost_target_hold_s: 0.3
 
 ui:
   tick_interval_s: 0.033

@@ -111,6 +111,7 @@ def _tracker_from_dict(data: dict) -> TrackerConfig:
         dead_zone=data.get("dead_zone", defaults.dead_zone),
         turn_gain=data.get("turn_gain", defaults.turn_gain),
         turn_speed=data.get("turn_speed", defaults.turn_speed),
+        lost_target_hold_s=data.get("lost_target_hold_s", defaults.lost_target_hold_s),
     )
 
 
