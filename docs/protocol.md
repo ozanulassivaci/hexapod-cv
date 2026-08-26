@@ -86,6 +86,7 @@ the robot not moving without plugging in USB":
 | `calibration_armed` | yes | So a GUI can show current arm state continuously rather than inferring it from the last ack. |
 | `bench_armed` | yes | Same idea, for the separate bench-mode gate (§8) — a GUI must be able to show these two arm states independently, since they're independent gates. |
 | `link_timeout_s` | yes | The robot's own compiled-in failsafe timeout. This is the runtime cross-check from §5, not a debugging field as such — the PC compares it against its own `LINK_TIMEOUT_S` on every telemetry receipt and surfaces a loud warning on mismatch (`RobotLink.constants_warning`). |
+| `robot_assembled` | yes | The robot's own compiled-in `ROBOT_ASSEMBLED` build flag (§9) — reported for a glanceable GUI display, *not* cross-checked, since there's no PC-side expected value to compare it against and no way to detect a stale flag from anything this system observes. |
 | `profiles` | yes, nullable | Full servo profile table (offset, sign, bench-recorded limits, health note — see §7), populated only in reply to `read_offsets`; `null` otherwise. See §6 — this is the "cheap to undo" mechanism, not the arm/disarm gate. |
 
 ## 4. Sequence numbers
@@ -310,6 +311,55 @@ special wire value. Parking at nominal center (not a per-unit corrected
 value) before pressing a horn onto the spline is deliberate: the small
 per-unit deviation gets corrected later via `offset_us`, during
 calibration, not baked into where the horn physically sits.
+
+## 9. `robot_assembled` telemetry: reported, not cross-checked
+
+Firmware's `ROBOT_ASSEMBLED` build flag (`firmware/include/Config.h`)
+selects what "safe" means on a fault — release every servo (`Bench`) or
+hold the last commanded position (`Assembled`), see `SafeState.h`. It's a
+compile-time choice with a real hardware consequence if it's wrong in one
+specific direction: still `Bench`-flagged on an actually-assembled,
+standing robot means a fault drops it. Forgetting to flip it after
+assembly is a real, plausible failure mode — a `#define` with no runtime
+visibility is exactly the kind of thing that's easy to forget weeks after
+it was last touched.
+
+`Telemetry.robot_assembled` reports the compiled-in value on every
+packet, same pattern as `link_timeout_s` (§5), and the GUI displays it as
+a persistent, glanceable badge (`SAFETY: BENCH` / `SAFETY: ASSEMBLED`),
+not just a log line — the point is that it's visible without having to go
+looking for it.
+
+**Deliberately not cross-checked, unlike `link_timeout_s`.** §5's
+runtime cross-check works because there are two independent sources of
+truth to compare — the PC's own `LINK_TIMEOUT_S` and the value firmware
+reports — and a mismatch between them is meaningful. `robot_assembled`
+has no PC-side equivalent to compare against: nothing on the PC has, or
+could have, an independent opinion about whether the robot is physically
+assembled. So the only question worth asking is whether a mismatch
+between the flag and *physical reality* (not another wire value) is
+detectable at all, from anything this system observes.
+
+It was considered and rejected, not just left undone. The one candidate
+signal available — "gait is being actively commanded while the flag says
+`Bench`" — sounds plausible but doesn't work: driving gait while still
+`Bench`-flagged is *also* exactly the correct, expected workflow for
+testing gait right up through the first cautious walk on a newly
+assembled robot, deliberately left on `Bench` one test longer as extra
+margin before trusting `Assembled`'s hold-on-fault behavior. Legitimate
+pre-flip testing and a forgotten flip produce the identical observable —
+active gait, flag still `Bench` — so a warning built on that signal would
+fire constantly during the exact legitimate use it would supposedly be
+protecting against, training the operator to ignore it. No other signal
+exists either: there's no load cell, no IMU, no per-channel current
+sensing (`rail_mv` is reserved and unpopulated for exactly this reason),
+nothing anywhere in this system that observes whether a leg is bearing
+weight right now. The badge is informational — it tells a human what
+firmware compiled with, so *their own* knowledge of whether the robot is
+actually assembled is what catches a stale flag, not this system.
+`MockRobotLink`/`SimRobotLink` report a fixed, constructor-set value for
+the same reason (`MockRobotLink(robot_assembled=...)`; `SimRobotLink`
+always reports `False`, since nothing is assembled in simulation either).
 
 ## Commands
 

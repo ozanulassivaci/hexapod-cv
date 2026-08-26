@@ -207,4 +207,9 @@ class SimRobotLink(RobotLink):
             )
         idle = is_motion_idle(vx, vy, speed, rotation)
         gait_phase = None if idle else self.state.snapshot(connected=True).gait_phase
-        return dataclasses.replace(mock_telemetry, gait_phase=gait_phase)
+        # Always False -- nothing is assembled in the simulator either,
+        # and there's no SafetyMode concept here to report otherwise (see
+        # simulator/robot_state.py: gait freezing on timeout already
+        # behaves like "hold", the only mode that matters for a
+        # visualization with no legs to release in the first place).
+        return dataclasses.replace(mock_telemetry, gait_phase=gait_phase, robot_assembled=False)

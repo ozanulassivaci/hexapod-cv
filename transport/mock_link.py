@@ -65,6 +65,7 @@ class MockRobotLink(RobotLink):
         connection_timeout_s: float = LINK_TIMEOUT_S,
         calibration_arm_timeout_s: float = CALIBRATION_ARM_TIMEOUT_S,
         bench_arm_timeout_s: float = BENCH_ARM_TIMEOUT_S,
+        robot_assembled: bool = False,
     ) -> None:
         super().__init__(connection_timeout_s=connection_timeout_s)
         self.console_log = console_log
@@ -72,6 +73,11 @@ class MockRobotLink(RobotLink):
 
         self._calibration_arm_timeout_s = calibration_arm_timeout_s
         self._bench_arm_timeout_s = bench_arm_timeout_s
+        # A fixed, constructor-set value, not something any command can
+        # change -- mirrors firmware's ROBOT_ASSEMBLED being a compile-time
+        # build flag, not wire state. Defaults to False (bench) since
+        # that's this project's own default and nothing is assembled.
+        self._robot_assembled = robot_assembled
         self._seq = 0
         self._last_motion_command: Command = StopCommand()
         # Separate from _last_motion_command (a plain last-command echo
@@ -274,6 +280,7 @@ class MockRobotLink(RobotLink):
             link_timeout_s=LINK_TIMEOUT_S,
             calibration_armed=calibration_armed,
             bench_armed=bench_armed,
+            robot_assembled=self._robot_assembled,
             last_applied=self._last_motion_command,
             profiles=profiles,
         )

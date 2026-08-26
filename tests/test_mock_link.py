@@ -23,6 +23,18 @@ from transport.protocol import (
 )
 
 
+def test_robot_assembled_defaults_to_false():
+    link = MockRobotLink()
+    assert link.latest_telemetry().robot_assembled is False
+
+
+def test_robot_assembled_reports_constructor_value():
+    link = MockRobotLink(robot_assembled=True)
+    assert link.latest_telemetry().robot_assembled is True
+    link.send(PingCommand())
+    assert link.latest_telemetry().robot_assembled is True  # fixed, not command-changeable
+
+
 def test_works_with_zero_configuration():
     link = MockRobotLink()
     assert link.is_connected is True

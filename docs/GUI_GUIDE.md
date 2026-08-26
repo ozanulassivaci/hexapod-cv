@@ -86,6 +86,16 @@ autosave. Export before you close, every time, if the session mattered.
   means not connected — no camera reachable, or no robot responding. A red
   camera light with no camera plugged in is completely normal; the app is
   designed to run that way.
+- **SAFETY badge (blue "BENCH" or purple "ASSEMBLED").** Which
+  fault-response mode the *connected firmware* was compiled with —
+  `ROBOT_ASSEMBLED` in `firmware/include/Config.h`, see
+  `docs/HOW_TO_USE.md`. Blue/purple on purpose, not red/green: neither
+  mode is "wrong" by itself, and this app cannot tell you whether it's
+  the *right* one for the robot in front of you right now — that's a
+  build-time flag with no sensor behind it. This badge exists so you
+  don't have to go looking for the answer; it doesn't replace checking it
+  against what you actually know about the robot's assembly state.
+  Reads "SAFETY: n/a" before the first telemetry arrives.
 - **Constants warning banner (only appears if something's wrong).** If it
   shows up, the robot and this app disagree about how long they'll wait
   before timing out the link. This is a real safety mismatch, not

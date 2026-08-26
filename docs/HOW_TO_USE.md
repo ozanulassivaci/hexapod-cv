@@ -172,12 +172,19 @@ involvement needed to "hold."
    `#define ROBOT_ASSEMBLED 1`.
 3. Reflash — OTA is fine (see Section 2a), same as any other firmware
    change.
-4. After it reboots, confirm the flip actually took effect: the boot
-   line and the `status` serial command both print `safety_mode=`. If
-   you're not on USB for the reboot itself, connect once afterward to
-   check — the GUI has no equivalent readout for this, since it's a
-   build-time fact, not telemetry.
-5. From here on, a link timeout or OTA start mid-walk holds the pose
+4. After it reboots, confirm the flip actually took effect. The easiest
+   way: launch the GUI and look at the **SAFETY** badge — it now reports
+   this over telemetry, so it reads "SAFETY: ASSEMBLED" the moment the
+   GUI reconnects, no USB needed. The boot line and `status` serial
+   command also print `safety_mode=`, useful if you're already on USB
+   for some other reason.
+5. Remember what the badge cannot tell you: it shows what firmware
+   compiled with, not whether that's actually correct for the robot in
+   front of you. Nothing in this system senses physical assembly state —
+   see `docs/protocol.md` Section 9 for why that was considered and
+   ruled out, not just skipped. Checking the badge against what you
+   actually know about the robot is still on you.
+6. From here on, a link timeout or OTA start mid-walk holds the pose
    instead of dropping — expected, and the entire point of the flip. It
    does not change bench-testing behavior: a single loose servo's dwell
    timeout still releases that one channel on its own, independent of

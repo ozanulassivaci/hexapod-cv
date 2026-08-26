@@ -423,6 +423,7 @@ size_t encodeTelemetry(const Telemetry& t, uint8_t* outBuf, size_t outBufLen) {
     doc["link_timeout_s"] = t.linkTimeoutS;
     doc["calibration_armed"] = t.calibrationArmed;
     doc["bench_armed"] = t.benchArmed;
+    doc["robot_assembled"] = t.robotAssembled;
 
     if (t.hasLastApplied) {
         JsonObject la = doc["last_applied"].to<JsonObject>();

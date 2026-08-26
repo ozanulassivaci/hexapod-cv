@@ -373,6 +373,7 @@ static void buildBaseTelemetry(Telemetry& t) {
     t.linkTimeoutS = HX_LINK_TIMEOUT_S;
     t.calibrationArmed = calibrationGate.isArmed();
     t.benchArmed = benchGate.isArmed();
+    t.robotAssembled = ROBOT_ASSEMBLED;
     t.hasLastApplied = hasMotion;
     if (hasMotion) t.lastApplied = lastMotion;
     // null while not walking (docs/protocol.md Section 3), matching

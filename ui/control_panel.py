@@ -26,6 +26,13 @@ from transport.protocol import FAULT_LINK_TIMEOUT, FAULT_ESTOP, FAULT_SERVO_FAUL
 _CONNECTED_STYLE = "background-color: #1b5e20; color: white; padding: 4px; font-weight: bold;"
 _DISCONNECTED_STYLE = "background-color: #b71c1c; color: white; padding: 4px; font-weight: bold;"
 _WARNING_STYLE = "background-color: #e65100; color: white; padding: 6px; font-weight: bold;"
+# Neither safety mode is "wrong" on its own -- these are informational,
+# not good/bad like CAMERA/LINK's green/red, so a distinct color family
+# (not red/green) on purpose. See set_safety_mode()'s docstring for why
+# this is never a warning even when it might be stale.
+_SAFETY_BENCH_STYLE = "background-color: #01579b; color: white; padding: 6px; font-weight: bold;"
+_SAFETY_ASSEMBLED_STYLE = "background-color: #4a148c; color: white; padding: 6px; font-weight: bold;"
+_SAFETY_UNKNOWN_STYLE = "background-color: #424242; color: white; padding: 6px; font-weight: bold;"
 _ESTOP_STYLE = (
     "background-color: #b71c1c; color: white; font-weight: bold; font-size: 20px; padding: 16px;"
 )
@@ -84,6 +91,14 @@ class ControlPanel(QWidget):
         row.addWidget(self._link_status)
         layout.addLayout(row)
 
+        # Its own full-width row, not squeezed into the CAMERA/LINK row --
+        # "ASSEMBLED (hold on fault)" needs room to read at a glance, not
+        # get truncated fighting two other badges for width.
+        self._safety_status = QLabel("SAFETY")
+        self._safety_status.setAlignment(Qt.AlignCenter)
+        self._safety_status.setFocusPolicy(Qt.NoFocus)
+        layout.addWidget(self._safety_status)
+
         self._constants_warning_label = QLabel()
         self._constants_warning_label.setWordWrap(True)
         self._constants_warning_label.setFocusPolicy(Qt.NoFocus)
@@ -92,6 +107,7 @@ class ControlPanel(QWidget):
 
         self.set_camera_connected(False)
         self.set_link_connected(False)
+        self.set_safety_mode(None)
         self.set_constants_warning(None)
         return box
 
@@ -198,6 +214,26 @@ class ControlPanel(QWidget):
         self._link_status.setText("LINK: connected" if connected else "LINK: disconnected")
         self._link_status.setStyleSheet(_CONNECTED_STYLE if connected else _DISCONNECTED_STYLE)
 
+    def set_safety_mode(self, robot_assembled: bool | None) -> None:
+        """robot_assembled echoes firmware's compiled-in ROBOT_ASSEMBLED
+        flag (Telemetry.robot_assembled) -- None before any telemetry has
+        arrived. There is deliberately no "mismatch" warning state here:
+        nothing in this system (no sensor, no cross-checkable PC-side
+        expectation) can tell whether this value still matches physical
+        reality, only what firmware last reported it compiled with. This
+        badge exists so a human catches a stale flag by their own
+        knowledge of whether the robot is actually assembled -- it is not
+        making that judgment itself. See docs/protocol.md Section 9."""
+        if robot_assembled is None:
+            self._safety_status.setText("SAFETY: n/a")
+            self._safety_status.setStyleSheet(_SAFETY_UNKNOWN_STYLE)
+        elif robot_assembled:
+            self._safety_status.setText("SAFETY: ASSEMBLED (hold on fault)")
+            self._safety_status.setStyleSheet(_SAFETY_ASSEMBLED_STYLE)
+        else:
+            self._safety_status.setText("SAFETY: BENCH (release on fault)")
+            self._safety_status.setStyleSheet(_SAFETY_BENCH_STYLE)
+
     def set_constants_warning(self, message: str | None) -> None:
         if message is None:
             self._constants_warning_label.hide()
@@ -212,6 +248,7 @@ class ControlPanel(QWidget):
             self._last_applied_label.setText("last applied: n/a")
             self._gait_phase_label.setText("gait phase: n/a")
             self._fault_flags_label.setText("faults: n/a")
+            self.set_safety_mode(None)
             return
 
         self._rtt_label.setText(f"RTT: {rtt_ms:.0f}ms" if rtt_ms is not None else "RTT: n/a")
@@ -221,6 +258,7 @@ class ControlPanel(QWidget):
             f"gait phase: {phase:.2f}" if phase is not None else "gait phase: n/a"
         )
         self._fault_flags_label.setText(f"faults: {_fault_flags_text(telemetry.fault_flags)}")
+        self.set_safety_mode(telemetry.robot_assembled)
 
     def set_current_intent(self, command: Command) -> None:
         self._current_intent_label.setText(f"intent: {command!r}")

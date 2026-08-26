@@ -256,6 +256,7 @@ void test_encode_telemetry_minimal_shape(void) {
     t.linkTimeoutS = 1.0f;
     t.calibrationArmed = false;
     t.benchArmed = true;
+    t.robotAssembled = false;
 
     uint8_t buf[512];
     size_t len = encodeTelemetry(t, buf, sizeof(buf));
@@ -274,6 +275,18 @@ void test_encode_telemetry_minimal_shape(void) {
     TEST_ASSERT_TRUE(doc["profiles"].isNull());
     TEST_ASSERT_FALSE(doc["calibration_armed"].as<bool>());
     TEST_ASSERT_TRUE(doc["bench_armed"].as<bool>());
+    TEST_ASSERT_FALSE(doc["robot_assembled"].as<bool>());
+}
+
+void test_encode_telemetry_robot_assembled_true(void) {
+    Telemetry t;
+    t.robotAssembled = true;
+
+    uint8_t buf[512];
+    size_t len = encodeTelemetry(t, buf, sizeof(buf));
+    JsonDocument doc;
+    deserializeJson(doc, buf, len);
+    TEST_ASSERT_TRUE(doc["robot_assembled"].as<bool>());
 }
 
 void test_encode_telemetry_with_error(void) {
@@ -379,6 +392,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_decode_rejects_negative_seq);
     RUN_TEST(test_decode_rejects_bool_as_armed);
     RUN_TEST(test_encode_telemetry_minimal_shape);
+    RUN_TEST(test_encode_telemetry_robot_assembled_true);
     RUN_TEST(test_encode_telemetry_with_error);
     RUN_TEST(test_encode_telemetry_with_last_applied_walk);
     RUN_TEST(test_encode_telemetry_with_profiles);

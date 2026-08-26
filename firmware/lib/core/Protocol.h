@@ -118,6 +118,7 @@ struct Telemetry {
     float linkTimeoutS = 0.0f;
     bool calibrationArmed = false;
     bool benchArmed = false;
+    bool robotAssembled = false;  // echoes Config.h's compiled-in ROBOT_ASSEMBLED, see SafeState.h
     bool hasLastApplied = false;
     MotionState lastApplied;
     bool hasProfiles = false;

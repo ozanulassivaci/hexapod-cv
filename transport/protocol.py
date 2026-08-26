@@ -673,7 +673,17 @@ class Telemetry:
     stop, body_height, pan_tilt, face); calibration- and bench-family
     commands report through `ok`/`error`/`profiles` instead, not through
     `last_applied` -- bench_pulse in particular is not motion/pose state,
-    it's direct hardware I/O with no kinematic meaning."""
+    it's direct hardware I/O with no kinematic meaning.
+
+    `robot_assembled` echoes firmware's compiled-in ROBOT_ASSEMBLED build
+    flag, same reporting pattern as `link_timeout_s` -- but unlike
+    `link_timeout_s`, there is no PC-side "expected" value to cross-check
+    it against (RobotLink.constants_warning has nothing to compare this
+    to), and no sensor anywhere in this system that observes physical
+    assembly state to detect a stale flag either. This field is reported
+    so the GUI can display it, not because a mismatch is detectable --
+    see docs/protocol.md Section 9 for why that was considered and
+    rejected, not just left undone."""
 
     seq_echo: int
     ok: bool
@@ -684,6 +694,7 @@ class Telemetry:
     link_timeout_s: float
     calibration_armed: bool
     bench_armed: bool
+    robot_assembled: bool
     last_applied: Command | None
     profiles: tuple | None
 
@@ -700,6 +711,7 @@ def encode_telemetry(telemetry: Telemetry) -> bytes:
         "link_timeout_s": telemetry.link_timeout_s,
         "calibration_armed": telemetry.calibration_armed,
         "bench_armed": telemetry.bench_armed,
+        "robot_assembled": telemetry.robot_assembled,
         "last_applied": (
             {"type": telemetry.last_applied.TYPE.value, **telemetry.last_applied._wire_fields()}
             if telemetry.last_applied is not None
@@ -723,6 +735,7 @@ def decode_telemetry(data: bytes) -> Telemetry:
         link_timeout_s = payload["link_timeout_s"]
         calibration_armed = payload["calibration_armed"]
         bench_armed = payload["bench_armed"]
+        robot_assembled = payload["robot_assembled"]
     except KeyError as exc:
         raise ProtocolError(f"telemetry missing field {exc}") from None
 
@@ -734,6 +747,8 @@ def decode_telemetry(data: bytes) -> Telemetry:
         raise ProtocolError(f"calibration_armed must be a bool, got {calibration_armed!r}")
     if not isinstance(bench_armed, bool):
         raise ProtocolError(f"bench_armed must be a bool, got {bench_armed!r}")
+    if not isinstance(robot_assembled, bool):
+        raise ProtocolError(f"robot_assembled must be a bool, got {robot_assembled!r}")
     if not isinstance(link_timeout_s, (int, float)) or isinstance(link_timeout_s, bool):
         raise ProtocolError(f"link_timeout_s must be a number, got {link_timeout_s!r}")
 
@@ -774,6 +789,7 @@ def decode_telemetry(data: bytes) -> Telemetry:
         link_timeout_s=float(link_timeout_s),
         calibration_armed=calibration_armed,
         bench_armed=bench_armed,
+        robot_assembled=robot_assembled,
         last_applied=last_applied,
         profiles=profiles,
     )

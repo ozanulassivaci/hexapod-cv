@@ -95,7 +95,7 @@ def test_telemetry_is_picked_up(link, fake_robot):
         rail_mv=None,
         link_timeout_s=1.0,
         calibration_armed=False,
-        bench_armed=False,
+        bench_armed=False, robot_assembled=False,
         last_applied=None,
         profiles=None,
     )
@@ -121,7 +121,7 @@ def test_is_connected_becomes_true_then_expires(link, fake_robot):
         fake_robot,
         Telemetry(
             seq_echo=seq, ok=True, error=None, fault_flags=0, gait_phase=None,
-            rail_mv=None, link_timeout_s=1.0, calibration_armed=False, bench_armed=False,
+            rail_mv=None, link_timeout_s=1.0, calibration_armed=False, bench_armed=False, robot_assembled=False,
             last_applied=None, profiles=None,
         ),
     )
@@ -138,12 +138,12 @@ def test_is_connected_becomes_true_then_expires(link, fake_robot):
 def test_out_of_order_telemetry_does_not_overwrite_newer(link, fake_robot):
     newer = Telemetry(
         seq_echo=10, ok=True, error=None, fault_flags=0, gait_phase=None,
-        rail_mv=None, link_timeout_s=1.0, calibration_armed=False, bench_armed=False,
+        rail_mv=None, link_timeout_s=1.0, calibration_armed=False, bench_armed=False, robot_assembled=False,
         last_applied=None, profiles=None,
     )
     older = Telemetry(
         seq_echo=3, ok=False, error="stale", fault_flags=0, gait_phase=None,
-        rail_mv=None, link_timeout_s=1.0, calibration_armed=False, bench_armed=False,
+        rail_mv=None, link_timeout_s=1.0, calibration_armed=False, bench_armed=False, robot_assembled=False,
         last_applied=None, profiles=None,
     )
     telemetry_to(link, fake_robot, newer)
@@ -157,7 +157,7 @@ def test_out_of_order_telemetry_does_not_overwrite_newer(link, fake_robot):
 def test_out_of_order_telemetry_still_counts_as_liveness(link, fake_robot):
     newer = Telemetry(
         seq_echo=10, ok=True, error=None, fault_flags=0, gait_phase=None,
-        rail_mv=None, link_timeout_s=1.0, calibration_armed=False, bench_armed=False,
+        rail_mv=None, link_timeout_s=1.0, calibration_armed=False, bench_armed=False, robot_assembled=False,
         last_applied=None, profiles=None,
     )
     telemetry_to(link, fake_robot, newer)
@@ -166,7 +166,7 @@ def test_out_of_order_telemetry_still_counts_as_liveness(link, fake_robot):
 
     older = Telemetry(
         seq_echo=3, ok=True, error=None, fault_flags=0, gait_phase=None,
-        rail_mv=None, link_timeout_s=1.0, calibration_armed=False, bench_armed=False,
+        rail_mv=None, link_timeout_s=1.0, calibration_armed=False, bench_armed=False, robot_assembled=False,
         last_applied=None, profiles=None,
     )
     # A stale/reordered packet still proves the link is alive right now,
@@ -187,7 +187,7 @@ def test_malformed_telemetry_is_dropped_without_crashing(link, fake_robot):
         fake_robot,
         Telemetry(
             seq_echo=seq, ok=True, error=None, fault_flags=0, gait_phase=None,
-            rail_mv=None, link_timeout_s=1.0, calibration_armed=False, bench_armed=False,
+            rail_mv=None, link_timeout_s=1.0, calibration_armed=False, bench_armed=False, robot_assembled=False,
             last_applied=None, profiles=None,
         ),
     )
@@ -225,7 +225,7 @@ def test_constants_warning_none_when_matching(link, fake_robot):
         fake_robot,
         Telemetry(
             seq_echo=seq, ok=True, error=None, fault_flags=0, gait_phase=None,
-            rail_mv=None, link_timeout_s=LINK_TIMEOUT_S, calibration_armed=False, bench_armed=False,
+            rail_mv=None, link_timeout_s=LINK_TIMEOUT_S, calibration_armed=False, bench_armed=False, robot_assembled=False,
             last_applied=None, profiles=None,
         ),
     )
@@ -243,7 +243,7 @@ def test_constants_warning_set_on_mismatch(link, fake_robot):
         fake_robot,
         Telemetry(
             seq_echo=seq, ok=True, error=None, fault_flags=0, gait_phase=None,
-            rail_mv=None, link_timeout_s=999.0, calibration_armed=False, bench_armed=False,
+            rail_mv=None, link_timeout_s=999.0, calibration_armed=False, bench_armed=False, robot_assembled=False,
             last_applied=None, profiles=None,
         ),
     )

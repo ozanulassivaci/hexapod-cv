@@ -23,6 +23,14 @@ def test_works_with_zero_configuration():
     link.close()
 
 
+def test_robot_assembled_always_false():
+    link = SimRobotLink()
+    assert link.latest_telemetry().robot_assembled is False
+    link.send(WalkCommand(vx=1.0, vy=0.0, speed=50))
+    assert link.latest_telemetry().robot_assembled is False
+    link.close()
+
+
 def test_send_returns_incrementing_sequence():
     link = SimRobotLink()
     seq_a = link.send(PingCommand())
