@@ -200,7 +200,12 @@ autosave. Export before you close, every time, if the session mattered.
   currently commanded as this servo's safe boundary, under whichever
   future position you've selected below. This is a real safety value the
   firmware is meant to respect later — don't mark a limit you haven't
-  actually confirmed is safe.
+  actually confirmed is safe. Stored as degrees from this joint's own
+  neutral, not the raw pulse number you were looking at — deliberately,
+  so a limit measured once on this one test leg's coxa (say) applies
+  correctly to all six coxa servos later, even though each gets its own
+  separate mounting-error correction. The profile table (Calibrate tab)
+  shows it back to you in those same degrees, not microseconds.
 - **Sweep: min / max / seconds, Start, ABORT SWEEP.** One slow pass from
   min to max and back to neutral, automatically. Defaults are deliberately
   narrow — widen them yourself once you trust the servo, don't start wide.

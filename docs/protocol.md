@@ -212,22 +212,47 @@ than to make it hard to send:
 ## 7. Servo profile: merged storage, separate write paths
 
 Bench testing (§8) discovers two more numbers per servo beyond calibration's
-offset/sign: a measured safe minimum and maximum pulse width. The question
+offset/sign: a measured safe minimum and maximum joint travel. The question
 was whether these live in the same table as offset/sign or a separate one.
 
 Merged into one `ServoProfile` record (`servo_index`, `offset_us`, `sign`,
-`min_pulse_us`, `max_pulse_us`, `note`), for the same reason constants got
-one YAML source of truth instead of two independently-maintained copies
-(§5): both describe one physical unit, looked up by the same key, and
-splitting them into two tables means two export files that can silently
-drift apart — the exact failure mode this project has been designing
-against throughout. Extending an existing struct with two nullable ints
-and a string costs far less protocol surface than a second bulk read/
-write/export/import pipeline.
+`min_deg_from_neutral`, `max_deg_from_neutral`, `note`), for the same
+reason constants got one YAML source of truth instead of two
+independently-maintained copies (§5): both describe one physical unit,
+looked up by the same key, and splitting them into two tables means two
+export files that can silently drift apart — the exact failure mode this
+project has been designing against throughout. Extending an existing
+struct with two nullable numbers and a string costs far less protocol
+surface than a second bulk read/write/export/import pipeline.
 
-`min_pulse_us`/`max_pulse_us` default to `None`, not `0` or some
-plausible-looking placeholder — a servo that hasn't been bench-tested must
-be distinguishable from one whose limit was recorded as an actual value.
+**Degrees from this joint's own neutral, not absolute pulse
+microseconds.** The bring-up plan is one physical test leg first (three
+servos: one coxa, one femur, one tibia) before the full 18-servo build —
+its measured limits need to describe every servo of that *type*, not just
+the three actually on the bench, since all six legs share the same
+mechanical geometry. Absolute pulse microseconds don't transfer: each of
+the other fifteen servos gets its own `offset_us`, correcting that unit's
+own spline-mounting error so that "commanded at neutral" lands at the same
+true physical pose everywhere — which means the same mechanical rotation
+limit corresponds to a *different* absolute pulse on every unit. Degrees
+relative to neutral sidestep this entirely: `offset_us`'s whole job is
+making neutral mean the same physical pose regardless of mounting error,
+so a bound expressed relative to neutral is unit-independent in exactly
+the way an absolute pulse isn't. `record_limit` still carries `pulse_us`
+on the wire — what the operator actually verifies safe on the bench, in
+raw hardware terms — and the conversion happens where the value is merged
+into the profile (firmware, using that servo's joint type from
+`ServoMap.h` to pick the right neutral), not on the wire. Keeping
+pulse↔degree conversion out of the wire format matches `ANALYSIS.md`
+Section 7's "one leaf function" rule for pulse units generally, and bench
+mode's own enforcement (a raw `bench_pulse` command, §8) converts the same
+way before comparing, so a limit recorded on the bench and a pulse
+commanded on the bench are always compared in the same frame.
+
+`min_deg_from_neutral`/`max_deg_from_neutral` default to `None`, not `0`
+or some plausible-looking placeholder — a servo that hasn't been
+bench-tested must be distinguishable from one whose limit was recorded as
+an actual value.
 
 Storage is shared; the *write* paths are not, because offset and limits
 have genuinely different risk profiles (a correction vs. a safety bound
@@ -235,10 +260,10 @@ the firmware is meant to enforce on every command regardless of source):
 
 - `calibrate` / `write_offsets` only ever write `offset_us`/`sign`, gated
   by `calibration_mode`, exactly as before.
-- `record_limit` only ever writes `min_pulse_us` or `max_pulse_us` (one
-  bound per call, matching the range finder's actual workflow — nudge
-  toward one end, mark it, then the other), gated by `bench_mode` (§8), a
-  different arm switch entirely.
+- `record_limit` only ever writes `min_deg_from_neutral` or
+  `max_deg_from_neutral` (one bound per call, matching the range finder's
+  actual workflow — nudge toward one end, mark it, then the other), gated
+  by `bench_mode` (§8), a different arm switch entirely.
 - `bench_health_note` writes `note`. Not gated by either arm switch — it's
   advisory record-keeping, not a physical actuation or a safety-relevant
   value, and you may want to note a unit that isn't even the one currently
@@ -301,11 +326,15 @@ recording"), not an oversight.
 
 Bounds on `bench_pulse.pulse_us` (`BENCH_PULSE_MIN_US`/`MAX_US`, 500-2500)
 are the generic hobby-servo envelope, not a per-unit safety limit — a
-sanity check at the protocol level. The GUI additionally narrows its own
-slider to a servo's recorded `min_pulse_us`/`max_pulse_us` once bench
-testing has found them, but before that exists there's nothing to clamp to
-except this generic bound and the operator's own attention, one small
-nudge at a time.
+sanity check at the protocol level. The GUI's manual pulse slider always
+spans this same full generic range, even after bench testing has recorded
+a narrower `min_deg_from_neutral`/`max_deg_from_neutral` for that servo —
+it does not currently narrow itself to the recorded limit, only the wire
+enforcement (`GatedServoDriver`, this section) does. Until it does,
+there's nothing narrowing what the slider *shows* except the generic
+bound and the operator's own attention, one small nudge at a time; the
+GUI does display the recorded limit as text once known (see
+`docs/GUI_GUIDE.md`'s Bench Test tab section).
 
 `NEUTRAL_PULSE_US` (1500, the standard hobby-servo center) is used purely
 as a client-side convention for "safe to hold indefinitely" — it is not a
@@ -428,7 +457,7 @@ out-of-range command cannot be built, let alone sent.
 | `write_offsets` | `offsets` (list of `{servo_index, offset_us, sign}`, 1-18 entries, no duplicate indices) | bulk restore of offset/sign only, never limits/note (§7); requires calibration mode armed |
 | `bench_mode` | `armed` (bool) | arms/disarms `bench_pulse`/`record_limit`; independent of `calibration_mode` (§8) |
 | `bench_pulse` | `board` (int), `channel` (int), `pulse_us` (int), `servo_index` (int, optional) | `board ∈ {0x40, 0x41}`, `channel ∈ [0, 15]`, `pulse_us ∈ [500, 2500]`, `servo_index ∈ [0, 17]` if given; requires bench mode armed |
-| `record_limit` | `servo_index` (int), `bound` (`"min"`/`"max"`), `pulse_us` (int) | `servo_index ∈ [0, 17]`, `pulse_us ∈ [500, 2500]`; requires bench mode armed; rejected if it would make `min_pulse_us >= max_pulse_us` for that servo |
+| `record_limit` | `servo_index` (int), `bound` (`"min"`/`"max"`), `pulse_us` (int) | `servo_index ∈ [0, 17]`, `pulse_us ∈ [500, 2500]`; requires bench mode armed; converted to degrees from that servo's own neutral before storage (§7), rejected if that would make `min_deg_from_neutral >= max_deg_from_neutral` for that servo |
 | `bench_health_note` | `servo_index` (int), `note` (str) | `servo_index ∈ [0, 17]`, `note` ≤ 500 chars; not gated |
 | `ping` | — | — |
 
@@ -443,11 +472,13 @@ implementing firmware — `GatedServoDriver` needs a servo identity to look
 up a bench-recorded limit against, but `board`/`channel` alone doesn't
 give it one (a loose servo hasn't necessarily been assigned a leg
 position yet, per this section's note above). When given, the receiver
-enforces that servo's recorded `min_pulse_us`/`max_pulse_us` (if any)
-against the pulse, exactly like a `record_limit`-recorded bound always
-works; when omitted, only the generic envelope bound applies. Both
-firmware and `MockRobotLink` implement this identically (`transport/
-mock_link.py`).
+converts the commanded `pulse_us` to degrees from that servo's own
+neutral (the same conversion `record_limit` uses, §7) and enforces that
+servo's recorded `min_deg_from_neutral`/`max_deg_from_neutral` (if any)
+against it — a bench-recorded bound and a bench-commanded pulse are
+always compared in the same frame; when `servo_index` is omitted, only
+the generic envelope bound applies. Both firmware and `MockRobotLink`
+implement this identically (`transport/mock_link.py`).
 
 **On `calibrate`'s two fields**: `offset_us` is a per-servo pulse trim
 (microsecond correction around center), and `sign` is a per-servo rotation
