@@ -89,30 +89,45 @@ class RobotLink(ABC):
         seq = self.send(command)
         return self.wait_for_ack(seq, timeout_s=timeout_s)
 
-    def _record_telemetry(self, telemetry: Telemetry, *, allow_same_seq: bool = False) -> bool:
-        """Subclasses call this whenever a telemetry packet is decoded (or,
-        for MockRobotLink, synthesized). Any receipt counts as proof of
-        life for is_connected; only a *newer* seq_echo replaces the stored
-        telemetry content, same latest-wins rule commands use -- a
-        reordered, stale telemetry packet must not un-show a more recent
-        one. Returns whether the content was accepted.
+    def _record_telemetry(self, telemetry: Telemetry) -> bool:
+        """Call this whenever a telemetry packet is actually decoded off a
+        real transport (currently: UDPRobotLink._receive_loop only). Any
+        receipt counts as proof of life for is_connected; only a *newer*
+        seq_echo replaces the stored telemetry content, same latest-wins
+        rule commands use -- a reordered, stale, or duplicate wire packet
+        must not un-show a more recent one. Returns whether the content
+        was accepted.
 
-        allow_same_seq exists for local, single-threaded in-place updates
-        that aren't a new wire packet at all (MockRobotLink.set_fault
-        amending the currently-stored telemetry) -- there is no reordering
-        risk to guard against there, unlike real decoded network traffic,
-        so the equal-seq case is allowed through rather than treated as a
-        stale duplicate."""
+        There is exactly one caller left, on purpose: MockRobotLink and
+        SimRobotLink compute telemetry locally, with no real packet or
+        network behind it -- "did a newer packet arrive" is a category
+        error there, not a rare edge case, since nothing can reorder or
+        duplicate a single in-process computation. Route a
+        locally-synthesized caller to _record_local_telemetry() below
+        instead of adding another opt-out parameter here; this method's
+        contract stays narrow (real wire packets only) on purpose."""
         now = time.monotonic()
         with self._lock:
             self._latest_telemetry_at = now
             if self._latest_telemetry is not None:
-                is_newer = sequence_is_newer(telemetry.seq_echo, self._latest_telemetry.seq_echo)
-                is_same = telemetry.seq_echo == self._latest_telemetry.seq_echo
-                if not is_newer and not (allow_same_seq and is_same):
+                if not sequence_is_newer(telemetry.seq_echo, self._latest_telemetry.seq_echo):
                     return False
             self._latest_telemetry = telemetry
             return True
+
+    def _record_local_telemetry(self, telemetry: Telemetry) -> None:
+        """For telemetry synthesized in-process -- every MockRobotLink and
+        SimRobotLink call, with no real packet or transport underneath
+        any of them. Always accepts and marks a fresh is_connected
+        timestamp, same as _record_telemetry's proof-of-life behavior,
+        but with no seq_echo comparison at all: there is nothing here a
+        network could have reordered or duplicated, only one in-process
+        computation of "what's true right now," so the newer-seq-only
+        rule that method exists to enforce is not a weaker version of
+        what's needed here, it's simply not the applicable check."""
+        with self._lock:
+            self._latest_telemetry_at = time.monotonic()
+            self._latest_telemetry = telemetry
 
     def __enter__(self) -> "RobotLink":
         return self

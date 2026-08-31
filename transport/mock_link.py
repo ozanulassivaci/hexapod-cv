@@ -102,10 +102,12 @@ class MockRobotLink(RobotLink):
         # Seed telemetry so latest_telemetry()/is_connected work before the
         # first send() -- a mock "robot" is always on until told otherwise.
         # seq_echo is seeded one before the real counter's start (wrapping
-        # to SEQUENCE_MODULUS - 1), not 0, so the first real send (seq=0)
-        # is correctly treated as newer by the latest-wins check instead of
-        # colliding with this seed value.
-        self._record_telemetry(
+        # to SEQUENCE_MODULUS - 1), not 0, so wait_for_ack(0) called before
+        # any real send can't accidentally match this seed instead of
+        # waiting for the real seq-0 reply -- unrelated to how this gets
+        # stored (see _record_local_telemetry, no seq comparison happens
+        # there at all).
+        self._record_local_telemetry(
             self._make_telemetry(seq_echo=SEQUENCE_MODULUS - 1, ok=True, error=None, profiles=None)
         )
 
@@ -124,7 +126,7 @@ class MockRobotLink(RobotLink):
             print(f"[MockRobotLink] seq={seq} {command!r}")
 
         ok, error, profiles_reply = self._apply(command)
-        self._record_telemetry(
+        self._record_local_telemetry(
             self._make_telemetry(seq_echo=seq, ok=ok, error=error, profiles=profiles_reply)
         )
         return seq
@@ -136,9 +138,7 @@ class MockRobotLink(RobotLink):
         telemetry = self.latest_telemetry()
         if telemetry is None:
             return
-        self._record_telemetry(
-            dataclasses.replace(telemetry, fault_flags=fault_flags), allow_same_seq=True
-        )
+        self._record_local_telemetry(dataclasses.replace(telemetry, fault_flags=fault_flags))
 
     def close(self) -> None:
         self._closed = True

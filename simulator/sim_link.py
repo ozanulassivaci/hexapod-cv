@@ -102,7 +102,7 @@ class SimRobotLink(RobotLink):
             )
             self._heartbeat_thread.start()
 
-        self._record_telemetry(self._augment(self._mock.latest_telemetry()))
+        self._record_local_telemetry(self._augment(self._mock.latest_telemetry()))
 
     def send(self, command: Command) -> int:
         if self._closed:
@@ -126,7 +126,7 @@ class SimRobotLink(RobotLink):
 
         seq = self._mock.send(command)
         if not dropped:
-            self._record_telemetry(self._augment(self._mock.latest_telemetry()))
+            self._record_local_telemetry(self._augment(self._mock.latest_telemetry()))
         return seq
 
     def close(self) -> None:
@@ -187,21 +187,18 @@ class SimRobotLink(RobotLink):
         retransmit here, only the freshness bookkeeping a resend would
         have refreshed on both ends.
 
-        allow_same_seq=True matters here, not just as a formality:
-        _augment() recomputes real, live content every call (gait_phase,
-        ik_clip_count/... -- all read fresh from self.state, which the
-        background stepping thread keeps advancing regardless of when a
-        command was last sent). Without it, _record_telemetry's
-        same-seq-is-stale guard (correct for real decoded wire packets,
-        where an unchanged seq really does mean "nothing new") would
-        discard that fresh computation every heartbeat tick purely
-        because self._mock's own seq counter only advances on send() --
-        exactly the "local, single-threaded in-place update, not a new
-        wire packet" case that flag exists for (see
-        RobotLink._record_telemetry's docstring; MockRobotLink.set_fault
-        is the other caller). A held key with no new send() call (see
-        this class's own module docstring: MainWindow relies entirely on
-        the heartbeat to keep intent flowing) would otherwise show frozen
+        _record_local_telemetry (not _record_telemetry) matters here, not
+        just as a formality: _augment() recomputes real, live content
+        every call (gait_phase, ik_clip_count/... -- all read fresh from
+        self.state, which the background stepping thread keeps advancing
+        regardless of when a command was last sent). _record_telemetry's
+        same-seq-is-stale guard would discard that fresh computation
+        every heartbeat tick purely because self._mock's own seq counter
+        only advances on send() -- a real network packet with an
+        unchanged seq really does mean "nothing new," but nothing here is
+        a network packet. A held key with no new send() call (see this
+        class's own module docstring: MainWindow relies entirely on the
+        heartbeat to keep intent flowing) would otherwise show frozen
         telemetry -- including a clip warning that stopped updating right
         when it matters most."""
         while not self._stop_event.wait(self._heartbeat_interval_s):
@@ -210,7 +207,7 @@ class SimRobotLink(RobotLink):
                 if not dropped:
                     self._last_command_at = time.monotonic()
             if not dropped:
-                self._record_telemetry(self._augment(self._mock.latest_telemetry()), allow_same_seq=True)
+                self._record_local_telemetry(self._augment(self._mock.latest_telemetry()))
 
     def _augment(self, mock_telemetry: Telemetry) -> Telemetry:
         """MockRobotLink's telemetry, with gait_phase populated for real
