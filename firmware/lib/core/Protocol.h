@@ -119,6 +119,13 @@ struct Telemetry {
     bool calibrationArmed = false;
     bool benchArmed = false;
     bool robotAssembled = false;  // echoes Config.h's compiled-in ROBOT_ASSEMBLED, see SafeState.h
+    // Cumulative since GaitEngine construction (never since the last
+    // packet) -- mirrors transport/protocol.py's Telemetry, see that
+    // struct's comment for the full rationale.
+    uint32_t ikClipCount = 0;
+    float ikClipWorstMm = 0.0f;
+    uint32_t jointClipCount = 0;
+    float jointClipWorstDeg = 0.0f;
     bool hasLastApplied = false;
     MotionState lastApplied;
     bool hasProfiles = false;

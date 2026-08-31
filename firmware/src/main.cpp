@@ -381,6 +381,10 @@ static void buildBaseTelemetry(Telemetry& t) {
     // bench-arm-refusal check use.
     t.hasGaitPhase = !isMotionIdle(currentVx, currentVy, currentSpeed, currentRotation);
     t.gaitPhase = gaitEngine.state().phase;
+    t.ikClipCount = gaitEngine.state().ikClipCount;
+    t.ikClipWorstMm = gaitEngine.state().ikClipWorstMm;
+    t.jointClipCount = gaitEngine.state().jointClipCount;
+    t.jointClipWorstDeg = gaitEngine.state().jointClipWorstDeg;
 }
 
 // --- UDP -----------------------------------------------------------------
@@ -594,6 +598,18 @@ void loop() {
             faultFlags |= FAULT_SERVO_FAULT_BIT;
         } else {
             faultFlags &= ~FAULT_SERVO_FAULT_BIT;
+        }
+        // Level-triggered on the tick that just ran -- the cumulative
+        // ikClipCount/jointClipCount in telemetry are the diagnostic
+        // detail behind this bit, not what it's derived from. Today gait
+        // is the only mode, and the verified-safe envelope means any
+        // clip here is genuinely anomalous (see GaitState's docstring in
+        // Gait.h) -- once Test Leg exploration mode exists, that code
+        // needs to stop setting this bit while exploration is deliberate.
+        if (gaitEngine.state().clippedThisTick) {
+            faultFlags |= FAULT_IK_CLIP_BIT;
+        } else {
+            faultFlags &= ~FAULT_IK_CLIP_BIT;
         }
     }
 

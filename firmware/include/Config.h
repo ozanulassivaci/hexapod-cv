@@ -62,15 +62,18 @@
 #define TIBIA_NEUTRAL_PULSE_US BENCH_PULSE_MIN_US
 
 // Fault flag bits, mirrors transport/protocol.py's FAULT_* constants.
-// LINK_TIMEOUT and SERVO_FAULT (set when the gait control loop's
-// computed pulse is refused by GatedServoDriver against a bench-recorded
-// limit -- see main.cpp's driveGaitOutputs) are the only bits this build
-// ever sets; ESTOP and BROWNOUT are reserved so the wire format doesn't
-// change when those fault sources exist later.
+// LINK_TIMEOUT, SERVO_FAULT (set when the gait control loop's computed
+// pulse is refused by GatedServoDriver against a bench-recorded limit --
+// see main.cpp's driveGaitOutputs), and IK_CLIP (set when the most
+// recent gait tick needed to clamp a leg's D or a joint angle -- see
+// GaitState::clippedThisTick) are the only bits this build ever sets;
+// ESTOP and BROWNOUT are reserved so the wire format doesn't change when
+// those fault sources exist later.
 #define FAULT_LINK_TIMEOUT_BIT (1u << 0)
 #define FAULT_ESTOP_BIT (1u << 1)
 #define FAULT_SERVO_FAULT_BIT (1u << 2)
 #define FAULT_BROWNOUT_BIT (1u << 3)
+#define FAULT_IK_CLIP_BIT (1u << 4)
 
 // --- Safe-state mode -----------------------------------------------------
 //

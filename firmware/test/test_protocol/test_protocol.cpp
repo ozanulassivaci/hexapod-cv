@@ -289,6 +289,36 @@ void test_encode_telemetry_robot_assembled_true(void) {
     TEST_ASSERT_TRUE(doc["robot_assembled"].as<bool>());
 }
 
+void test_encode_telemetry_default_clip_stats_are_zero(void) {
+    Telemetry t;
+
+    uint8_t buf[512];
+    size_t len = encodeTelemetry(t, buf, sizeof(buf));
+    JsonDocument doc;
+    deserializeJson(doc, buf, len);
+    TEST_ASSERT_EQUAL(0, doc["ik_clip_count"].as<unsigned long>());
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, doc["ik_clip_worst_mm"].as<float>());
+    TEST_ASSERT_EQUAL(0, doc["joint_clip_count"].as<unsigned long>());
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, doc["joint_clip_worst_deg"].as<float>());
+}
+
+void test_encode_telemetry_clip_stats(void) {
+    Telemetry t;
+    t.ikClipCount = 3;
+    t.ikClipWorstMm = 12.5f;
+    t.jointClipCount = 1;
+    t.jointClipWorstDeg = 2.25f;
+
+    uint8_t buf[512];
+    size_t len = encodeTelemetry(t, buf, sizeof(buf));
+    JsonDocument doc;
+    deserializeJson(doc, buf, len);
+    TEST_ASSERT_EQUAL(3, doc["ik_clip_count"].as<unsigned long>());
+    TEST_ASSERT_EQUAL_FLOAT(12.5f, doc["ik_clip_worst_mm"].as<float>());
+    TEST_ASSERT_EQUAL(1, doc["joint_clip_count"].as<unsigned long>());
+    TEST_ASSERT_EQUAL_FLOAT(2.25f, doc["joint_clip_worst_deg"].as<float>());
+}
+
 void test_encode_telemetry_with_error(void) {
     Telemetry t;
     t.ok = false;
@@ -393,6 +423,8 @@ int main(int argc, char** argv) {
     RUN_TEST(test_decode_rejects_bool_as_armed);
     RUN_TEST(test_encode_telemetry_minimal_shape);
     RUN_TEST(test_encode_telemetry_robot_assembled_true);
+    RUN_TEST(test_encode_telemetry_default_clip_stats_are_zero);
+    RUN_TEST(test_encode_telemetry_clip_stats);
     RUN_TEST(test_encode_telemetry_with_error);
     RUN_TEST(test_encode_telemetry_with_last_applied_walk);
     RUN_TEST(test_encode_telemetry_with_profiles);

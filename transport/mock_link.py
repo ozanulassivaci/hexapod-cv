@@ -281,6 +281,11 @@ class MockRobotLink(RobotLink):
             calibration_armed=calibration_armed,
             bench_armed=bench_armed,
             robot_assembled=self._robot_assembled,
+            # No gait simulation here either -- see gait_phase above.
+            # Left as the dataclass default (0/0.0) rather than restated,
+            # since unlike gait_phase there's no None-vs-0.0 ambiguity to
+            # be explicit about: zero clips is the true and complete
+            # answer for a link that never runs gait.
             last_applied=self._last_motion_command,
             profiles=profiles,
         )

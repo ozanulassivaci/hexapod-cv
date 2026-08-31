@@ -424,6 +424,10 @@ size_t encodeTelemetry(const Telemetry& t, uint8_t* outBuf, size_t outBufLen) {
     doc["calibration_armed"] = t.calibrationArmed;
     doc["bench_armed"] = t.benchArmed;
     doc["robot_assembled"] = t.robotAssembled;
+    doc["ik_clip_count"] = t.ikClipCount;
+    doc["ik_clip_worst_mm"] = t.ikClipWorstMm;
+    doc["joint_clip_count"] = t.jointClipCount;
+    doc["joint_clip_worst_deg"] = t.jointClipWorstDeg;
 
     if (t.hasLastApplied) {
         JsonObject la = doc["last_applied"].to<JsonObject>();

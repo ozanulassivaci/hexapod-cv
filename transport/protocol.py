@@ -43,6 +43,11 @@ FAULT_LINK_TIMEOUT = 1 << 0
 FAULT_ESTOP = 1 << 1
 FAULT_SERVO_FAULT = 1 << 2
 FAULT_BROWNOUT = 1 << 3
+# Set when the gait control loop's most recent tick needed to clamp
+# either a leg's D (reachability) or a joint angle -- level-triggered,
+# cleared the next tick if it doesn't recur. See Telemetry.ik_clip_count
+# below for the cumulative counters this summarizes.
+FAULT_IK_CLIP = 1 << 4
 
 
 class ProtocolError(ValueError):
@@ -697,6 +702,20 @@ class Telemetry:
     robot_assembled: bool
     last_applied: Command | None
     profiles: tuple | None
+    # Cumulative since the gait engine last reset (boot, or -- once it
+    # exists -- SimRobotLink construction), never since the last packet.
+    # ANALYSIS.md Section 5.7 flagged IK's reachability clamp and joint-
+    # angle clamp as silent; these are what make them observable instead
+    # of discarded. Default 0/0.0 rather than nullable: unlike gait_phase
+    # (meaningless while idle), "zero clips so far" is a real, always-
+    # meaningful value, including for MockRobotLink, which never runs
+    # gait at all. See robot/gait.py's GaitState docstring for the full
+    # design rationale, including why FAULT_IK_CLIP (this tick only) is
+    # a separate signal from these cumulative counters.
+    ik_clip_count: int = 0
+    ik_clip_worst_mm: float = 0.0
+    joint_clip_count: int = 0
+    joint_clip_worst_deg: float = 0.0
 
 
 def encode_telemetry(telemetry: Telemetry) -> bytes:
@@ -712,6 +731,10 @@ def encode_telemetry(telemetry: Telemetry) -> bytes:
         "calibration_armed": telemetry.calibration_armed,
         "bench_armed": telemetry.bench_armed,
         "robot_assembled": telemetry.robot_assembled,
+        "ik_clip_count": telemetry.ik_clip_count,
+        "ik_clip_worst_mm": telemetry.ik_clip_worst_mm,
+        "joint_clip_count": telemetry.joint_clip_count,
+        "joint_clip_worst_deg": telemetry.joint_clip_worst_deg,
         "last_applied": (
             {"type": telemetry.last_applied.TYPE.value, **telemetry.last_applied._wire_fields()}
             if telemetry.last_applied is not None
@@ -736,6 +759,10 @@ def decode_telemetry(data: bytes) -> Telemetry:
         calibration_armed = payload["calibration_armed"]
         bench_armed = payload["bench_armed"]
         robot_assembled = payload["robot_assembled"]
+        ik_clip_count = payload["ik_clip_count"]
+        ik_clip_worst_mm = payload["ik_clip_worst_mm"]
+        joint_clip_count = payload["joint_clip_count"]
+        joint_clip_worst_deg = payload["joint_clip_worst_deg"]
     except KeyError as exc:
         raise ProtocolError(f"telemetry missing field {exc}") from None
 
@@ -751,6 +778,18 @@ def decode_telemetry(data: bytes) -> Telemetry:
         raise ProtocolError(f"robot_assembled must be a bool, got {robot_assembled!r}")
     if not isinstance(link_timeout_s, (int, float)) or isinstance(link_timeout_s, bool):
         raise ProtocolError(f"link_timeout_s must be a number, got {link_timeout_s!r}")
+    if not isinstance(ik_clip_count, int) or isinstance(ik_clip_count, bool) or ik_clip_count < 0:
+        raise ProtocolError(f"invalid ik_clip_count: {ik_clip_count!r}")
+    if not isinstance(ik_clip_worst_mm, (int, float)) or isinstance(ik_clip_worst_mm, bool) or ik_clip_worst_mm < 0:
+        raise ProtocolError(f"invalid ik_clip_worst_mm: {ik_clip_worst_mm!r}")
+    if not isinstance(joint_clip_count, int) or isinstance(joint_clip_count, bool) or joint_clip_count < 0:
+        raise ProtocolError(f"invalid joint_clip_count: {joint_clip_count!r}")
+    if (
+        not isinstance(joint_clip_worst_deg, (int, float))
+        or isinstance(joint_clip_worst_deg, bool)
+        or joint_clip_worst_deg < 0
+    ):
+        raise ProtocolError(f"invalid joint_clip_worst_deg: {joint_clip_worst_deg!r}")
 
     error = payload.get("error")
     if error is not None and not isinstance(error, str):
@@ -790,6 +829,10 @@ def decode_telemetry(data: bytes) -> Telemetry:
         calibration_armed=calibration_armed,
         bench_armed=bench_armed,
         robot_assembled=robot_assembled,
+        ik_clip_count=ik_clip_count,
+        ik_clip_worst_mm=float(ik_clip_worst_mm),
+        joint_clip_count=joint_clip_count,
+        joint_clip_worst_deg=float(joint_clip_worst_deg),
         last_applied=last_applied,
         profiles=profiles,
     )

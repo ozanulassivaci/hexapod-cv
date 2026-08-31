@@ -13,6 +13,7 @@ from transport.protocol import (
     CalibrateCommand,
     CalibrationModeCommand,
     FaceCommand,
+    FAULT_IK_CLIP,
     HEALTH_NOTE_MAX_LEN,
     LimitBound,
     Mood,
@@ -106,6 +107,94 @@ def test_telemetry_round_trip_minimal():
     )
     decoded = decode_telemetry(encode_telemetry(telemetry))
     assert decoded == telemetry
+
+
+def test_telemetry_round_trip_carries_clip_stats():
+    telemetry = Telemetry(
+        seq_echo=1,
+        ok=True,
+        error=None,
+        fault_flags=FAULT_IK_CLIP,
+        gait_phase=0.5,
+        rail_mv=None,
+        link_timeout_s=1.0,
+        calibration_armed=False,
+        bench_armed=False,
+        robot_assembled=False,
+        last_applied=None,
+        profiles=None,
+        ik_clip_count=3,
+        ik_clip_worst_mm=12.5,
+        joint_clip_count=1,
+        joint_clip_worst_deg=2.25,
+    )
+    decoded = decode_telemetry(encode_telemetry(telemetry))
+    assert decoded == telemetry
+
+
+def test_telemetry_clip_fields_default_to_zero():
+    telemetry = Telemetry(
+        seq_echo=0,
+        ok=True,
+        error=None,
+        fault_flags=0,
+        gait_phase=None,
+        rail_mv=None,
+        link_timeout_s=1.0,
+        calibration_armed=False,
+        bench_armed=False,
+        robot_assembled=False,
+        last_applied=None,
+        profiles=None,
+    )
+    assert telemetry.ik_clip_count == 0
+    assert telemetry.ik_clip_worst_mm == 0.0
+    assert telemetry.joint_clip_count == 0
+    assert telemetry.joint_clip_worst_deg == 0.0
+
+
+def test_telemetry_decode_rejects_missing_ik_clip_count():
+    telemetry = Telemetry(
+        seq_echo=0,
+        ok=True,
+        error=None,
+        fault_flags=0,
+        gait_phase=None,
+        rail_mv=None,
+        link_timeout_s=1.0,
+        calibration_armed=False,
+        bench_armed=False,
+        robot_assembled=False,
+        last_applied=None,
+        profiles=None,
+    )
+    encoded = encode_telemetry(telemetry)
+    payload = json.loads(encoded)
+    del payload["ik_clip_count"]
+    with pytest.raises(ProtocolError):
+        decode_telemetry(json.dumps(payload).encode("utf-8"))
+
+
+def test_telemetry_decode_rejects_negative_joint_clip_worst_deg():
+    telemetry = Telemetry(
+        seq_echo=0,
+        ok=True,
+        error=None,
+        fault_flags=0,
+        gait_phase=None,
+        rail_mv=None,
+        link_timeout_s=1.0,
+        calibration_armed=False,
+        bench_armed=False,
+        robot_assembled=False,
+        last_applied=None,
+        profiles=None,
+    )
+    encoded = encode_telemetry(telemetry)
+    payload = json.loads(encoded)
+    payload["joint_clip_worst_deg"] = -1.0
+    with pytest.raises(ProtocolError):
+        decode_telemetry(json.dumps(payload).encode("utf-8"))
 
 
 def test_telemetry_decode_rejects_missing_robot_assembled():
