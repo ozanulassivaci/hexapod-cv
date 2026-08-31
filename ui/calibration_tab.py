@@ -19,12 +19,13 @@ read/export/import. The arm/disarm UI matters, but the export reminder is
 the part that's "hard to skip".
 
 This tab only ever writes offset_us/sign (via calibrate/write_offsets).
-min_pulse_us/max_pulse_us/note are written exclusively by the Bench Test
-tab (its own arm gate, its own commands) -- but since both live in the
-same ServoProfile record (docs/protocol.md Section 1), reading/exporting
-here shows the full picture, including whatever bench testing has already
-found. This tab's table is a snapshot as of the last "Read offsets" click,
-not live-synced with the Bench tab -- re-read to see its updates here.
+min_deg_from_neutral/max_deg_from_neutral/note are written exclusively by
+the Bench Test tab (its own arm gate, its own commands) -- but since both
+live in the same ServoProfile record (docs/protocol.md Section 1),
+reading/exporting here shows the full picture, including whatever bench
+testing has already found. This tab's table is a snapshot as of the last
+"Read offsets" click, not live-synced with the Bench tab -- re-read to
+see its updates here.
 """
 
 import dataclasses
@@ -67,11 +68,11 @@ _UNEXPORTED_STYLE = "background-color: #e65100; color: white; padding: 6px; font
 
 
 def _limits_text(profile: ServoProfile) -> str:
-    if profile.min_pulse_us is None and profile.max_pulse_us is None:
+    if profile.min_deg_from_neutral is None and profile.max_deg_from_neutral is None:
         return "not bench-tested"
-    lo = profile.min_pulse_us if profile.min_pulse_us is not None else "?"
-    hi = profile.max_pulse_us if profile.max_pulse_us is not None else "?"
-    return f"{lo}-{hi}us"
+    lo = f"{profile.min_deg_from_neutral:.1f}" if profile.min_deg_from_neutral is not None else "?"
+    hi = f"{profile.max_deg_from_neutral:.1f}" if profile.max_deg_from_neutral is not None else "?"
+    return f"{lo} to {hi} deg from neutral"
 
 
 class CalibrationTab(QWidget):

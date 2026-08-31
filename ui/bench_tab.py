@@ -546,8 +546,8 @@ class BenchTab(QWidget):
 
 
 def _limits_text(profile: ServoProfile) -> str:
-    if profile.min_pulse_us is None and profile.max_pulse_us is None:
+    if profile.min_deg_from_neutral is None and profile.max_deg_from_neutral is None:
         return "not bench-tested"
-    lo = profile.min_pulse_us if profile.min_pulse_us is not None else "?"
-    hi = profile.max_pulse_us if profile.max_pulse_us is not None else "?"
-    return f"{lo}-{hi}us"
+    lo = f"{profile.min_deg_from_neutral:.1f}" if profile.min_deg_from_neutral is not None else "?"
+    hi = f"{profile.max_deg_from_neutral:.1f}" if profile.max_deg_from_neutral is not None else "?"
+    return f"{lo} to {hi} deg from neutral"
