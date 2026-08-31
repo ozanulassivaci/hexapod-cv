@@ -115,6 +115,109 @@ servo rail — but the ESP32 itself talks to you over WiFi, same as always.
 5. Servo rail **OFF** again before you unplug that servo or wire up the
    next one.
 
+## Mounting horns for the single test leg
+
+Before any exploration work starts, one leg gets its three horns mounted
+at specific angles computed from the gait envelope (`robot/gait.py`,
+`firmware/lib/core/Gait.h`, commit `b009cd4`). "Mount at servo angle X"
+is ambiguous on its own — this section says exactly what to command,
+what pose to hold the leg segment in while pressing the horn on, and how
+to eyeball-check you landed on the right spline tooth.
+
+The numbers below assume: the leg is wired to a Bench Test tab channel
+one servo at a time; `TIBIA_NEUTRAL_PULSE_US` is still the unverified
+`Config.h` placeholder (500us, same as `BENCH_PULSE_MIN_US`) — if that
+value changes before you do this, redo the tibia arithmetic first; and no
+`offset_us` calibration exists yet, since bench mode drives raw pulses.
+Mount now, calibrate precisely once the leg is on and Calibrate is
+usable.
+
+**Order: coxa, then tibia, then femur.** Coxa doesn't depend on anything
+else. Tibia's check is relative to the femur segment's own straight line,
+which works with no horn on the femur servo yet — you just need
+something rigid to sight along. Femur goes last because by then coxa and
+tibia are already fixed in place, so a simple gravity-referenced level
+check becomes valid.
+
+For each joint: wire it to a Bench Test channel, arm Bench Test, drag the
+manual pulse slider to the value below (or nudge with +/- until the
+readout matches), physically hold the leg segment in the stated pose,
+then press the horn onto the spline. Keep the servo powered and holding
+that exact pulse the whole time you're pressing — parking at neutral or
+releasing would let the segment drift while you're trying to align it.
+
+### 1. Coxa — 90.0 servo degrees, 1500us
+
+- Command 1500us on the coxa channel.
+- There's no body and no leg yet, so there's no compass direction to
+  check against. Mount the horn (with the femur segment attached to it)
+  pointing away from the servo body in any convenient direction — that
+  becomes your reference line for the check below.
+- **Check:** with the horn on, nudge the slider toward each side (about
+  1420us and 1580us — the gait envelope's +-19.6 degree limits) and
+  watch the leg swing. It should swing visibly the same amount to both
+  sides of your reference line. If one side is clearly shorter than the
+  other, the horn is a spline tooth (14.4 degrees) off — pull it and
+  rotate one tooth toward the short side.
+- Return the slider to 1500us before moving on.
+
+### 2. Tibia — 77.0 servo degrees, 1355us
+
+- Command 1355us on the tibia channel (the servo mounted at the femur
+  segment's far end).
+- Hold the femur segment straight — resting it flat against the table
+  edge or any straightedge is enough. It doesn't need to be at its own
+  final mounting angle yet.
+- **Check:** the tibia segment should fold away from that straight line
+  by about 103 degrees, measured on the inside of the bend — a bit more
+  open than a right angle — folding the same direction a knee bends, not
+  backward. By eye, it should look closer to "mostly folded, slightly
+  open" than to "half-folded" (90 degrees) or "barely bent" (135+
+  degrees). If it looks off by roughly one spline tooth's worth (14.4
+  degrees more or less folded), pull the horn and shift one tooth.
+
+### 3. Femur — 124.2 servo degrees, 1880us
+
+- Coxa and tibia are already fixed at this point — no other joint's pose
+  matters for this check.
+- Command 1880us on the femur channel.
+- **Check:** hold a level (or a phone inclinometer app) against the flat
+  top or bottom face of the femur segment. It should read about 34
+  degrees above horizontal, tilted up from the coxa — clearly angled
+  upward, not flat and not steeply raised. If the level reads close to
+  horizontal (0) or steep (45+), the horn is roughly a spline tooth off;
+  pull it and shift one tooth toward 34 degrees.
+
+### Headroom against a mounting error
+
+25T splines only take a tooth every 14.4 degrees, so no matter how
+carefully you align by eye, worst case you're 7.2 degrees off — the
+checks above exist to make sure you picked the *nearest* tooth, not one
+14.4 degrees away, not to make the mount exact. Whether 7.2 degrees is
+safe to walk away from depends on how much room the gait envelope has
+against the servo's own end of travel (not yet against real mechanical
+limits — nothing is measured until the Test Leg exploration work
+happens):
+
+- **Coxa:** envelope needs 70.4-109.6 degrees of the servo's 0-180 range
+  — 70.4 degrees of headroom on both ends. No concern.
+- **Femur:** envelope needs 87.9-160.5 degrees — only 19.5 degrees of
+  headroom before the servo's own nominal 180-degree end. Survives a
+  7.2-degree mounting error with 12.3 degrees to spare, but this is the
+  joint to watch once real bench data comes in for this specific unit —
+  clone MG996Rs are already known not to reliably reach nominal 180 (see
+  the Bench Test tab's conservative 600-2400us range), which eats into
+  this margin from the servo side, independent of the horn mount.
+- **Tibia:** envelope needs 39.6-114.4 degrees — 39.6 and 65.6 degrees of
+  headroom on the low and high ends respectively. No concern.
+
+Coxa's mounting angle is identical across all six legs (the raw midpoint
+is exactly 0 degrees for every leg, corner or middle — confirmed by a
+leg-invariance check across the full envelope sweep), so the earlier
+0.35-degree corner/middle-leg discrepancy, whatever its source, doesn't
+show up in this number and doesn't need resolving before mounting this
+one test leg.
+
 ## 4. A full calibration session
 
 1. Robot fully assembled. Servo rail **ON**. No USB connected.
