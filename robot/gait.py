@@ -26,9 +26,9 @@ from robot.kinematics import (
     Leg,
     JointAngles,
     Point3,
-    clamp_joint_angles,
+    clamp_joint_angles_with_clip,
     forward_kinematics,
-    inverse_kinematics,
+    inverse_kinematics_with_clip,
 )
 
 STEP_LENGTH_MM = 60.0
@@ -183,23 +183,75 @@ def foot_target(
     return Point3(rotated_x + step_x, rotated_y + step_y, home.z + step_z)
 
 
+def _ik_goal(target: Point3, leg: Leg) -> tuple[JointAngles, float, float]:
+    """One leg's IK goal plus both clip mechanisms' overshoot for this
+    call (0.0 for either that didn't fire) -- the shared step used by
+    both GaitState.initial() and step(), so the two never drift apart on
+    how clip stats are computed."""
+    raw_angles, d_overshoot_mm = inverse_kinematics_with_clip(target, leg)
+    clamped_angles, joint_overshoot_deg = clamp_joint_angles_with_clip(raw_angles)
+    return clamped_angles, d_overshoot_mm, joint_overshoot_deg
+
+
 @dataclass(frozen=True)
 class GaitState:
     """phase plus every leg's currently-tracked (slew-limited) joint
     angles -- the only mutable-in-spirit state in this module; step()
     returns a new GaitState rather than mutating, matching the frozen-
-    dataclass style used throughout this codebase's pure-logic modules."""
+    dataclass style used throughout this codebase's pure-logic modules.
+
+    ik_clip_count/ik_clip_worst_mm and joint_clip_count/
+    joint_clip_worst_deg are cumulative since GaitState.initial() (never
+    reset by step()) -- ANALYSIS.md Section 5.7 flagged both of IK's
+    clip mechanisms (D clamped into the reachable annulus;  each joint
+    angle clamped to its configured bound) as silent. Each is now a real
+    per-leg-per-tick event count plus the worst overshoot ever seen, so a
+    fault buried in this counter is visible instead of invisibly
+    discarded. clipped_this_tick reflects only the most recent step()
+    call (or initial() itself) -- the level-triggered signal callers use
+    to derive an operator-facing fault bit, as opposed to the cumulative
+    counters, which are the diagnostic detail behind it. Given the
+    verified-safe gait envelope (zero clip events across the full
+    theoretical command space, see robot/gait.py's BODY_HEIGHT_Z_*/
+    STEP_HEIGHT_MM derivation), any clip firing during normal gait today
+    is genuinely anomalous, not routine -- worth surfacing, not just
+    counting quietly. That won't stay true once Test Leg exploration mode
+    (deliberately probing past limits) exists; whichever code adds that
+    mode needs to stop treating its clips as anomalous too."""
 
     phase: float
     body_height: float
     leg_angles: tuple[JointAngles, ...]
+    ik_clip_count: int = 0
+    ik_clip_worst_mm: float = 0.0
+    joint_clip_count: int = 0
+    joint_clip_worst_deg: float = 0.0
+    clipped_this_tick: bool = False
 
     @classmethod
     def initial(cls, body_height: float = DEFAULT_BODY_HEIGHT) -> "GaitState":
-        angles = tuple(
-            clamp_joint_angles(inverse_kinematics(home_position(leg, body_height), leg)) for leg in LEGS
+        angles = []
+        ik_clip_count = joint_clip_count = 0
+        ik_clip_worst_mm = joint_clip_worst_deg = 0.0
+        for leg in LEGS:
+            clamped_angles, d_overshoot_mm, joint_overshoot_deg = _ik_goal(home_position(leg, body_height), leg)
+            angles.append(clamped_angles)
+            if d_overshoot_mm > 0.0:
+                ik_clip_count += 1
+                ik_clip_worst_mm = max(ik_clip_worst_mm, d_overshoot_mm)
+            if joint_overshoot_deg > 0.0:
+                joint_clip_count += 1
+                joint_clip_worst_deg = max(joint_clip_worst_deg, joint_overshoot_deg)
+        return cls(
+            phase=0.0,
+            body_height=body_height,
+            leg_angles=tuple(angles),
+            ik_clip_count=ik_clip_count,
+            ik_clip_worst_mm=ik_clip_worst_mm,
+            joint_clip_count=joint_clip_count,
+            joint_clip_worst_deg=joint_clip_worst_deg,
+            clipped_this_tick=(ik_clip_count > 0 or joint_clip_count > 0),
         )
-        return cls(phase=0.0, body_height=body_height, leg_angles=angles)
 
     def foot_positions(self) -> tuple[Point3, ...]:
         return tuple(forward_kinematics(angles, leg) for angles, leg in zip(self.leg_angles, LEGS))
@@ -246,9 +298,31 @@ def step(
     max_delta_deg = MAX_SLEW_DEG_PER_S * max(0.0, dt_s)
 
     new_angles = []
+    ik_clip_count = state.ik_clip_count
+    ik_clip_worst_mm = state.ik_clip_worst_mm
+    joint_clip_count = state.joint_clip_count
+    joint_clip_worst_deg = state.joint_clip_worst_deg
+    clipped_this_tick = False
     for i, leg in enumerate(LEGS):
         goal_point = foot_target(i, leg, new_phase, vx, vy, speed, rotation, body_height)
-        goal_angles = clamp_joint_angles(inverse_kinematics(goal_point, leg))
+        goal_angles, d_overshoot_mm, joint_overshoot_deg = _ik_goal(goal_point, leg)
+        if d_overshoot_mm > 0.0:
+            ik_clip_count += 1
+            ik_clip_worst_mm = max(ik_clip_worst_mm, d_overshoot_mm)
+            clipped_this_tick = True
+        if joint_overshoot_deg > 0.0:
+            joint_clip_count += 1
+            joint_clip_worst_deg = max(joint_clip_worst_deg, joint_overshoot_deg)
+            clipped_this_tick = True
         new_angles.append(_slew_limit(state.leg_angles[i], goal_angles, max_delta_deg))
 
-    return GaitState(phase=new_phase, body_height=body_height, leg_angles=tuple(new_angles))
+    return GaitState(
+        phase=new_phase,
+        body_height=body_height,
+        leg_angles=tuple(new_angles),
+        ik_clip_count=ik_clip_count,
+        ik_clip_worst_mm=ik_clip_worst_mm,
+        joint_clip_count=joint_clip_count,
+        joint_clip_worst_deg=joint_clip_worst_deg,
+        clipped_this_tick=clipped_this_tick,
+    )

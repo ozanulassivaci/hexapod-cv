@@ -6,6 +6,8 @@
 // design rationale in comments; this is the port.
 #pragma once
 
+#include <cstdint>
+
 #include "Kinematics.h"
 
 constexpr float kStepLengthMm = 60.0f;
@@ -80,6 +82,19 @@ struct GaitState {
     float phase = 0.0f;
     float bodyHeight = kDefaultBodyHeight;
     JointAngles legAngles[6];
+
+    // Cumulative since GaitState::initial() (never reset by stepGait()) --
+    // ANALYSIS.md Section 5.7 flagged both of IK's clip mechanisms (D
+    // clamped into the reachable annulus; each joint angle clamped to
+    // its configured bound) as silent. Mirrors robot/gait.py's GaitState
+    // -- see that class's docstring for the full rationale, including
+    // why clippedThisTick (this tick only) is a separate signal from
+    // these cumulative counters.
+    uint32_t ikClipCount = 0;
+    float ikClipWorstMm = 0.0f;
+    uint32_t jointClipCount = 0;
+    float jointClipWorstDeg = 0.0f;
+    bool clippedThisTick = false;
 
     static GaitState initial(float bodyHeight = kDefaultBodyHeight);
 

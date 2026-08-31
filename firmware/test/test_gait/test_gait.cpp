@@ -148,6 +148,36 @@ void test_body_height_reachability_not_silently_clamped_at_extremes(void) {
     }
 }
 
+// --- Clip stats (ANALYSIS.md Section 5.7: was silent) ----------------------
+//
+// The Python side (tests/test_gait.py) additionally has a test that
+// forces a real clip through step()'s public path by monkeypatching
+// STEP_LENGTH_MM to something absurd -- not possible here, since
+// kStepLengthMm is a compile-time constexpr on purpose (a real,
+// intentional guarantee, not a test-convenience gap). The overshoot
+// computation itself is covered directly and precisely by
+// test_kinematics/'s test_unreachable_*_target_reports_matching_*
+// cases; what's left to check natively is that GaitState starts at zero
+// and stays there across the verified-safe envelope, mirroring the
+// Python regression guard of the same name.
+
+void test_clip_stats_stay_zero_across_the_verified_safe_envelope(void) {
+    GaitState state = GaitState::initial(50.0f);
+    for (int i = 0; i < 200; ++i) {
+        float vx = std::cos(i * 0.31f);
+        float vy = std::sin(i * 0.17f);
+        float speed = 50.0f + 50.0f * std::sin(i * 0.05f);
+        float rotation = std::sin(i * 0.13f);
+        float bodyHeight = 50.0f + 50.0f * std::sin(i * 0.02f);
+        state = stepGait(state, 0.02f, vx, vy, speed, rotation, bodyHeight);
+    }
+    TEST_ASSERT_EQUAL_UINT32(0, state.ikClipCount);
+    TEST_ASSERT_EQUAL_UINT32(0, state.jointClipCount);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, state.ikClipWorstMm);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, state.jointClipWorstDeg);
+    TEST_ASSERT_FALSE(state.clippedThisTick);
+}
+
 // --- isMotionIdle ------------------------------------------------------------
 
 void test_is_motion_idle(void) {
@@ -170,6 +200,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_body_height_mapping_endpoints);
     RUN_TEST(test_body_height_mapping_monotonic);
     RUN_TEST(test_body_height_reachability_not_silently_clamped_at_extremes);
+    RUN_TEST(test_clip_stats_stay_zero_across_the_verified_safe_envelope);
     RUN_TEST(test_is_motion_idle);
     return UNITY_END();
 }

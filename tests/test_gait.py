@@ -177,6 +177,66 @@ def test_body_height_mapping_monotonic():
         prev = current
 
 
+# --- Clip stats (ANALYSIS.md Section 5.7: was silent) ----------------------
+
+
+def test_clip_stats_stay_zero_across_the_verified_safe_envelope():
+    """The commandable envelope this module's own body-height/step-height
+    constants were chosen against (see their derivation comments above)
+    has zero D-clamp and zero joint-clamp events by construction -- if a
+    future constant change reintroduces clipping during ordinary gait,
+    this is the regression guard that catches it."""
+    state = GaitState.initial(body_height=50.0)
+    for i in range(200):
+        vx = math.cos(i * 0.31)
+        vy = math.sin(i * 0.17)
+        speed = 50.0 + 50.0 * math.sin(i * 0.05)
+        rotation = math.sin(i * 0.13)
+        body_height = 50.0 + 50.0 * math.sin(i * 0.02)
+        state = step(state, 0.02, vx=vx, vy=vy, speed=speed, rotation=rotation, body_height=body_height)
+    assert state.ik_clip_count == 0
+    assert state.joint_clip_count == 0
+    assert state.ik_clip_worst_mm == 0.0
+    assert state.joint_clip_worst_deg == 0.0
+    assert state.clipped_this_tick is False
+
+
+def test_clip_counters_increment_and_persist_across_ticks(monkeypatch):
+    """foot_target()'s own bounded inputs (speed 0-100, direction/
+    rotation magnitude <= 1, body_height 0-100) never produce an
+    unreachable target -- that's exactly what the test above pins.
+    Monkeypatching STEP_LENGTH_MM to something absurd, only for this
+    test, is the one way to force a target past D_max through step()'s
+    real public path instead of calling kinematics internals directly.
+    Counters must accumulate (not reset) across ticks, and
+    clipped_this_tick must reflect only the tick that just ran."""
+    import robot.gait as gaitmod
+
+    monkeypatch.setattr(gaitmod, "STEP_LENGTH_MM", 1000.0)
+
+    state = GaitState.initial(body_height=50.0)
+    assert state.ik_clip_count == 0
+
+    state = step(state, 0.02, vx=0.0, vy=0.0, speed=0.0, rotation=0.0, body_height=50.0)
+    # idle (speed=0) short-circuits to home, unaffected by STEP_LENGTH_MM
+    # -- confirms a normal tick doesn't spuriously count anything before
+    # the adversarial one below.
+    assert state.ik_clip_count == 0
+    assert state.clipped_this_tick is False
+
+    extreme = step(state, 0.02, vx=1.0, vy=0.0, speed=100.0, rotation=0.0, body_height=50.0)
+    assert extreme.ik_clip_count > 0
+    assert extreme.ik_clip_worst_mm > 0.0
+    assert extreme.clipped_this_tick is True
+
+    again = step(extreme, 0.02, vx=0.0, vy=0.0, speed=0.0, rotation=0.0, body_height=50.0)
+    # cumulative count never decreases even once the extreme input stops
+    assert again.ik_clip_count == extreme.ik_clip_count
+    assert again.ik_clip_worst_mm == extreme.ik_clip_worst_mm
+    # but clipped_this_tick is level-triggered on the tick that just ran
+    assert again.clipped_this_tick is False
+
+
 def test_body_height_reachability_not_silently_clamped_at_extremes():
     """The configured height range must stay inside the IK-reachable
     annulus at every leg's home (x, y) -- if IK's D clamp silently

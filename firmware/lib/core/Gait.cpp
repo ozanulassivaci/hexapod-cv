@@ -1,5 +1,6 @@
 #include "Gait.h"
 
+#include <algorithm>
 #include <cmath>
 
 const JointAngles kNeutralStanceAngles = {0.0f, 45.0f, -90.0f};
@@ -89,13 +90,38 @@ Point3 footTarget(int legIndex, const LegGeometry& leg, float phase, float vx, f
     return Point3{rotatedX + stepX, rotatedY + stepY, home.z + stepZ};
 }
 
+namespace {
+// Shared by GaitState::initial() and stepGait() so the two never drift
+// apart on how clip stats are computed -- mirrors robot/gait.py's
+// _ik_goal().
+JointAngles ikGoal(const Point3& target, const LegGeometry& leg, float& dOvershootMmOut,
+                    float& jointOvershootDegOut) {
+    IkResult ik = inverseKinematicsWithClip(target, leg);
+    ClampResult clamp = clampJointAnglesWithClip(ik.angles);
+    dOvershootMmOut = ik.dOvershootMm;
+    jointOvershootDegOut = clamp.worstOvershootDeg;
+    return clamp.angles;
+}
+}  // namespace
+
 GaitState GaitState::initial(float bodyHeight) {
     GaitState state;
     state.phase = 0.0f;
     state.bodyHeight = bodyHeight;
     for (int i = 0; i < 6; ++i) {
         Point3 home = homePosition(kLegs[i], bodyHeight);
-        state.legAngles[i] = clampJointAngles(inverseKinematics(home, kLegs[i]));
+        float dOvershootMm, jointOvershootDeg;
+        state.legAngles[i] = ikGoal(home, kLegs[i], dOvershootMm, jointOvershootDeg);
+        if (dOvershootMm > 0.0f) {
+            ++state.ikClipCount;
+            state.ikClipWorstMm = std::max(state.ikClipWorstMm, dOvershootMm);
+            state.clippedThisTick = true;
+        }
+        if (jointOvershootDeg > 0.0f) {
+            ++state.jointClipCount;
+            state.jointClipWorstDeg = std::max(state.jointClipWorstDeg, jointOvershootDeg);
+            state.clippedThisTick = true;
+        }
     }
     return state;
 }
@@ -117,9 +143,24 @@ GaitState stepGait(const GaitState& state, float dtS, float vx, float vy, float 
     GaitState next;
     next.phase = newPhase;
     next.bodyHeight = bodyHeight;
+    next.ikClipCount = state.ikClipCount;
+    next.ikClipWorstMm = state.ikClipWorstMm;
+    next.jointClipCount = state.jointClipCount;
+    next.jointClipWorstDeg = state.jointClipWorstDeg;
     for (int i = 0; i < 6; ++i) {
         Point3 goalPoint = footTarget(i, kLegs[i], newPhase, vx, vy, speed, rotation, bodyHeight);
-        JointAngles goalAngles = clampJointAngles(inverseKinematics(goalPoint, kLegs[i]));
+        float dOvershootMm, jointOvershootDeg;
+        JointAngles goalAngles = ikGoal(goalPoint, kLegs[i], dOvershootMm, jointOvershootDeg);
+        if (dOvershootMm > 0.0f) {
+            ++next.ikClipCount;
+            next.ikClipWorstMm = std::max(next.ikClipWorstMm, dOvershootMm);
+            next.clippedThisTick = true;
+        }
+        if (jointOvershootDeg > 0.0f) {
+            ++next.jointClipCount;
+            next.jointClipWorstDeg = std::max(next.jointClipWorstDeg, jointOvershootDeg);
+            next.clippedThisTick = true;
+        }
         const JointAngles& current = state.legAngles[i];
         next.legAngles[i] = JointAngles{
             slewOne(current.coxaDeg, goalAngles.coxaDeg, maxDeltaDeg),
