@@ -38,6 +38,14 @@ class RobotSnapshot:
     foot_positions: tuple[Point3, ...]
     stance: tuple[bool, ...]  # per leg, True = foot planted (stance half of the tripod cycle)
     connected: bool
+    # Straight passthrough of GaitState's cumulative clip stats -- see
+    # that class's docstring in robot/gait.py. sim_link.py's _augment()
+    # threads these into Telemetry the same way it already does gait_phase.
+    ik_clip_count: int
+    ik_clip_worst_mm: float
+    joint_clip_count: int
+    joint_clip_worst_deg: float
+    clipped_this_tick: bool
 
 
 class RobotState:
@@ -92,4 +100,9 @@ class RobotState:
             foot_positions=feet,
             stance=stance,
             connected=connected,
+            ik_clip_count=gait.ik_clip_count,
+            ik_clip_worst_mm=gait.ik_clip_worst_mm,
+            joint_clip_count=gait.joint_clip_count,
+            joint_clip_worst_deg=gait.joint_clip_worst_deg,
+            clipped_this_tick=gait.clipped_this_tick,
         )

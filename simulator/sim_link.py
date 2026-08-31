@@ -56,6 +56,7 @@ from transport.mock_link import MockRobotLink
 from transport.protocol import (
     BodyHeightCommand,
     Command,
+    FAULT_IK_CLIP,
     StopCommand,
     Telemetry,
     TurnCommand,
@@ -184,20 +185,44 @@ class SimRobotLink(RobotLink):
         between GUI-driven send() calls, standing in for a real
         transport's automatic resend -- there is no packet to actually
         retransmit here, only the freshness bookkeeping a resend would
-        have refreshed on both ends."""
+        have refreshed on both ends.
+
+        allow_same_seq=True matters here, not just as a formality:
+        _augment() recomputes real, live content every call (gait_phase,
+        ik_clip_count/... -- all read fresh from self.state, which the
+        background stepping thread keeps advancing regardless of when a
+        command was last sent). Without it, _record_telemetry's
+        same-seq-is-stale guard (correct for real decoded wire packets,
+        where an unchanged seq really does mean "nothing new") would
+        discard that fresh computation every heartbeat tick purely
+        because self._mock's own seq counter only advances on send() --
+        exactly the "local, single-threaded in-place update, not a new
+        wire packet" case that flag exists for (see
+        RobotLink._record_telemetry's docstring; MockRobotLink.set_fault
+        is the other caller). A held key with no new send() call (see
+        this class's own module docstring: MainWindow relies entirely on
+        the heartbeat to keep intent flowing) would otherwise show frozen
+        telemetry -- including a clip warning that stopped updating right
+        when it matters most."""
         while not self._stop_event.wait(self._heartbeat_interval_s):
             with self._gait_lock:
                 dropped = self._drop_until is not None and time.monotonic() < self._drop_until
                 if not dropped:
                     self._last_command_at = time.monotonic()
             if not dropped:
-                self._record_telemetry(self._augment(self._mock.latest_telemetry()))
+                self._record_telemetry(self._augment(self._mock.latest_telemetry()), allow_same_seq=True)
 
     def _augment(self, mock_telemetry: Telemetry) -> Telemetry:
         """MockRobotLink's telemetry, with gait_phase populated for real
         (mock always reports it as null -- see docs/protocol.md Section
         6's audit note) using this link's own current motion axes, same
-        null-while-idle rule firmware's buildBaseTelemetry uses."""
+        null-while-idle rule firmware's buildBaseTelemetry uses. Also
+        threads through the real cumulative IK-clip stats (mock's are
+        always zero, since it never runs gait) and derives FAULT_IK_CLIP
+        the same level-triggered way main.cpp does, so a gait bug that
+        clips is visible in the simulator too -- the whole point of this
+        module per its docstring ("catch a gait bug... before it ever
+        reaches a real servo")."""
         with self._gait_lock:
             vx, vy, speed, rotation = (
                 self._current_vx,
@@ -206,10 +231,21 @@ class SimRobotLink(RobotLink):
                 self._current_rotation,
             )
         idle = is_motion_idle(vx, vy, speed, rotation)
-        gait_phase = None if idle else self.state.snapshot(connected=True).gait_phase
+        snapshot = self.state.snapshot(connected=True)
+        gait_phase = None if idle else snapshot.gait_phase
+        fault_flags = FAULT_IK_CLIP if snapshot.clipped_this_tick else 0
         # Always False -- nothing is assembled in the simulator either,
         # and there's no SafetyMode concept here to report otherwise (see
         # simulator/robot_state.py: gait freezing on timeout already
         # behaves like "hold", the only mode that matters for a
         # visualization with no legs to release in the first place).
-        return dataclasses.replace(mock_telemetry, gait_phase=gait_phase, robot_assembled=False)
+        return dataclasses.replace(
+            mock_telemetry,
+            gait_phase=gait_phase,
+            robot_assembled=False,
+            fault_flags=fault_flags,
+            ik_clip_count=snapshot.ik_clip_count,
+            ik_clip_worst_mm=snapshot.ik_clip_worst_mm,
+            joint_clip_count=snapshot.joint_clip_count,
+            joint_clip_worst_deg=snapshot.joint_clip_worst_deg,
+        )

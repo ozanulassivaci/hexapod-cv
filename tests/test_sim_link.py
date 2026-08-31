@@ -7,6 +7,7 @@ from transport.protocol import (
     BenchModeCommand,
     BodyHeightCommand,
     CalibrationModeCommand,
+    FAULT_IK_CLIP,
     PingCommand,
     StopCommand,
     TurnCommand,
@@ -68,6 +69,38 @@ def test_gait_phase_telemetry_populated_while_walking():
     link.send(WalkCommand(vx=1.0, vy=0.0, speed=80))
     time.sleep(_SETTLE_S)
     assert link.latest_telemetry().gait_phase is not None
+    link.close()
+
+
+def test_clip_stats_stay_zero_during_ordinary_walking():
+    link = SimRobotLink()
+    link.send(WalkCommand(vx=1.0, vy=0.0, speed=80))
+    time.sleep(_SETTLE_S)
+    telemetry = link.latest_telemetry()
+    assert telemetry.ik_clip_count == 0
+    assert telemetry.joint_clip_count == 0
+    assert telemetry.fault_flags & FAULT_IK_CLIP == 0
+    link.close()
+
+
+def test_clip_stats_and_fault_bit_set_when_gait_actually_clips(monkeypatch):
+    """SimRobotLink exists to catch a gait bug before it reaches a real
+    servo (see its own module docstring) -- this pins that a clip is
+    actually visible through it, not just through robot/gait.py directly.
+    STEP_LENGTH_MM monkeypatched to something absurd, only for this test,
+    the same escape hatch tests/test_gait.py uses -- foot_target's own
+    bounded inputs never produce an unreachable target otherwise."""
+    import robot.gait as gaitmod
+
+    monkeypatch.setattr(gaitmod, "STEP_LENGTH_MM", 1000.0)
+
+    link = SimRobotLink()
+    link.send(WalkCommand(vx=1.0, vy=0.0, speed=100))
+    time.sleep(_SETTLE_S)
+    telemetry = link.latest_telemetry()
+    assert telemetry.ik_clip_count > 0
+    assert telemetry.ik_clip_worst_mm > 0.0
+    assert telemetry.fault_flags & FAULT_IK_CLIP != 0
     link.close()
 
 
