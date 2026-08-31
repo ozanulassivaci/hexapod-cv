@@ -44,7 +44,7 @@ void test_applies_pulse_with_no_servo_index(void) {
     GatedServoDriver driver(output, store);
 
     const char* reason = nullptr;
-    bool applied = driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 1500, false, 0, &reason);
+    bool applied = driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 1500, false, 0, 0.0f, &reason);
 
     TEST_ASSERT_TRUE(applied);
     auto key = std::make_pair<uint8_t, uint8_t>(PCA9685_ADDR_BOARD_A, 3);
@@ -55,15 +55,15 @@ void test_applies_pulse_within_recorded_limits(void) {
     FakeServoOutput output;
     FakeServoProfileStore store;
     ServoProfile p = ServoProfile::defaultFor(5);
-    p.hasMinPulse = true;
-    p.minPulseUs = 1000;
-    p.hasMaxPulse = true;
-    p.maxPulseUs = 2000;
+    p.hasMinDeg = true;
+    p.minDegFromNeutral = -45.0f;
+    p.hasMaxDeg = true;
+    p.maxDegFromNeutral = 45.0f;
     store.set(5, p);
     GatedServoDriver driver(output, store);
 
     const char* reason = nullptr;
-    bool applied = driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 1500, true, 5, &reason);
+    bool applied = driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 1500, true, 5, 0.0f, &reason);
 
     TEST_ASSERT_TRUE(applied);
     auto key = std::make_pair<uint8_t, uint8_t>(PCA9685_ADDR_BOARD_A, 3);
@@ -74,13 +74,13 @@ void test_refuses_pulse_below_recorded_min(void) {
     FakeServoOutput output;
     FakeServoProfileStore store;
     ServoProfile p = ServoProfile::defaultFor(5);
-    p.hasMinPulse = true;
-    p.minPulseUs = 1000;
+    p.hasMinDeg = true;
+    p.minDegFromNeutral = -45.0f;
     store.set(5, p);
     GatedServoDriver driver(output, store);
 
     const char* reason = nullptr;
-    bool applied = driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 900, true, 5, &reason);
+    bool applied = driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 900, true, 5, -50.0f, &reason);
 
     TEST_ASSERT_FALSE(applied);
     TEST_ASSERT_NOT_NULL(reason);
@@ -94,13 +94,13 @@ void test_refuses_pulse_above_recorded_max(void) {
     FakeServoOutput output;
     FakeServoProfileStore store;
     ServoProfile p = ServoProfile::defaultFor(5);
-    p.hasMaxPulse = true;
-    p.maxPulseUs = 2000;
+    p.hasMaxDeg = true;
+    p.maxDegFromNeutral = 45.0f;
     store.set(5, p);
     GatedServoDriver driver(output, store);
 
     const char* reason = nullptr;
-    bool applied = driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 2100, true, 5, &reason);
+    bool applied = driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 2100, true, 5, 50.0f, &reason);
 
     TEST_ASSERT_FALSE(applied);
     auto key = std::make_pair<uint8_t, uint8_t>(PCA9685_ADDR_BOARD_A, 3);
@@ -111,16 +111,16 @@ void test_boundary_values_are_accepted(void) {
     FakeServoOutput output;
     FakeServoProfileStore store;
     ServoProfile p = ServoProfile::defaultFor(5);
-    p.hasMinPulse = true;
-    p.minPulseUs = 1000;
-    p.hasMaxPulse = true;
-    p.maxPulseUs = 2000;
+    p.hasMinDeg = true;
+    p.minDegFromNeutral = -45.0f;
+    p.hasMaxDeg = true;
+    p.maxDegFromNeutral = 45.0f;
     store.set(5, p);
     GatedServoDriver driver(output, store);
 
     const char* reason = nullptr;
-    TEST_ASSERT_TRUE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 1000, true, 5, &reason));
-    TEST_ASSERT_TRUE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 2000, true, 5, &reason));
+    TEST_ASSERT_TRUE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 1000, true, 5, -45.0f, &reason));
+    TEST_ASSERT_TRUE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 2000, true, 5, 45.0f, &reason));
 }
 
 void test_no_recorded_limits_allows_any_in_range_pulse(void) {
@@ -129,8 +129,11 @@ void test_no_recorded_limits_allows_any_in_range_pulse(void) {
     GatedServoDriver driver(output, store);
 
     const char* reason = nullptr;
-    TEST_ASSERT_TRUE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, BENCH_PULSE_MIN_US, true, 5, &reason));
-    TEST_ASSERT_TRUE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, BENCH_PULSE_MAX_US, true, 5, &reason));
+    // degFromNeutral values here are deliberately extreme -- with no
+    // recorded limit, hasMinDeg/hasMaxDeg are false and no comparison
+    // happens at all, regardless of the value.
+    TEST_ASSERT_TRUE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, BENCH_PULSE_MIN_US, true, 5, -1000.0f, &reason));
+    TEST_ASSERT_TRUE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, BENCH_PULSE_MAX_US, true, 5, 1000.0f, &reason));
 }
 
 void test_release_forwards_to_output(void) {

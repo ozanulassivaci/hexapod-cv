@@ -36,3 +36,17 @@ extern const ServoMapEntry kServoMap[SERVO_COUNT];
 constexpr uint8_t servoIndexFor(uint8_t legIndex, JointType joint) {
     return legIndex * 3 + static_cast<uint8_t>(joint);
 }
+
+// Neutral servo-write convention per joint TYPE, not per physical unit --
+// coxa/femur are bipolar around 90/NEUTRAL_PULSE_US, tibia is zero-based
+// around 0/TIBIA_NEUTRAL_PULSE_US (Kinematics.h's toServoDeg(),
+// ANALYSIS.md Section 2's hardware coupling). Used to convert a bench-
+// recorded raw pulse (main.cpp's RecordLimit/BenchPulse handlers) or a
+// gait-computed servoDeg (driveGaitOutputs) into degrees relative to
+// *this joint's own* neutral -- see ServoProfile.h's
+// minDegFromNeutral/maxDegFromNeutral and AngleToPulse.h's
+// pulseUsToDegFromNeutral().
+constexpr float neutralServoDegFor(JointType joint) { return joint == JointType::Tibia ? 0.0f : 90.0f; }
+constexpr uint16_t neutralPulseUsFor(JointType joint) {
+    return joint == JointType::Tibia ? TIBIA_NEUTRAL_PULSE_US : NEUTRAL_PULSE_US;
+}

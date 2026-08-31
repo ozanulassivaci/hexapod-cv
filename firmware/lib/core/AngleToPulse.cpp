@@ -16,3 +16,7 @@ uint16_t angleToPulseUs(float servoDeg, float neutralServoDeg, uint16_t neutralP
     if (pulse > BENCH_PULSE_MAX_US) pulse = BENCH_PULSE_MAX_US;
     return static_cast<uint16_t>(std::lround(pulse));
 }
+
+float pulseUsToDegFromNeutral(uint16_t pulseUs, uint16_t neutralPulseUs) {
+    return (static_cast<float>(pulseUs) - static_cast<float>(neutralPulseUs)) / kUsPerDeg;
+}

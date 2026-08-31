@@ -46,11 +46,23 @@ void test_servo_index_for_matches_table_layout(void) {
     }
 }
 
+void test_neutral_convention_matches_kinematics_servo_write(void) {
+    // Coxa/femur bipolar around 90/NEUTRAL_PULSE_US, tibia zero-based
+    // around 0/TIBIA_NEUTRAL_PULSE_US -- Kinematics.h's toServoDeg().
+    TEST_ASSERT_EQUAL_FLOAT(90.0f, neutralServoDegFor(JointType::Coxa));
+    TEST_ASSERT_EQUAL_FLOAT(90.0f, neutralServoDegFor(JointType::Femur));
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, neutralServoDegFor(JointType::Tibia));
+    TEST_ASSERT_EQUAL_UINT16(NEUTRAL_PULSE_US, neutralPulseUsFor(JointType::Coxa));
+    TEST_ASSERT_EQUAL_UINT16(NEUTRAL_PULSE_US, neutralPulseUsFor(JointType::Femur));
+    TEST_ASSERT_EQUAL_UINT16(TIBIA_NEUTRAL_PULSE_US, neutralPulseUsFor(JointType::Tibia));
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_every_index_maps_to_a_valid_board_and_channel);
     RUN_TEST(test_no_two_servos_share_a_physical_channel);
     RUN_TEST(test_every_leg_has_exactly_one_coxa_femur_tibia);
     RUN_TEST(test_servo_index_for_matches_table_layout);
+    RUN_TEST(test_neutral_convention_matches_kinematics_servo_write);
     return UNITY_END();
 }

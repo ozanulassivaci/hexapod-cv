@@ -53,6 +53,33 @@ void test_extreme_offset_clamps_to_envelope(void) {
     TEST_ASSERT_EQUAL_UINT16(BENCH_PULSE_MAX_US, pulse);
 }
 
+// --- pulseUsToDegFromNeutral: the inverse relationship ---------------------
+
+void test_pulse_at_neutral_gives_zero_degrees(void) {
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, pulseUsToDegFromNeutral(NEUTRAL_PULSE_US, NEUTRAL_PULSE_US));
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, pulseUsToDegFromNeutral(TIBIA_NEUTRAL_PULSE_US, TIBIA_NEUTRAL_PULSE_US));
+}
+
+void test_pulse_to_deg_matches_bench_envelope_endpoints(void) {
+    // Coxa/femur: [500, 2500]us around neutral 1500 spans exactly [-90, +90].
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, -90.0f, pulseUsToDegFromNeutral(BENCH_PULSE_MIN_US, NEUTRAL_PULSE_US));
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, pulseUsToDegFromNeutral(BENCH_PULSE_MAX_US, NEUTRAL_PULSE_US));
+    // Tibia: [500, 2500]us around neutral 500 (zero-based) spans [0, +180].
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 0.0f, pulseUsToDegFromNeutral(BENCH_PULSE_MIN_US, TIBIA_NEUTRAL_PULSE_US));
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 180.0f, pulseUsToDegFromNeutral(BENCH_PULSE_MAX_US, TIBIA_NEUTRAL_PULSE_US));
+}
+
+void test_pulse_to_deg_is_the_inverse_of_angle_to_pulse_at_zero_offset(void) {
+    // With sign=1, offsetUs=0 (bench mode's own convention -- no
+    // calibration applied), angleToPulseUs and pulseUsToDegFromNeutral
+    // must be exact inverses of each other around any neutral.
+    for (float deg = -80.0f; deg <= 80.0f; deg += 10.0f) {
+        uint16_t pulse = angleToPulseUs(90.0f + deg, 90.0f, NEUTRAL_PULSE_US, 1, 0);
+        float recovered = pulseUsToDegFromNeutral(pulse, NEUTRAL_PULSE_US);
+        TEST_ASSERT_FLOAT_WITHIN(1e-1f, deg, recovered);
+    }
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_coxa_femur_neutral_gives_neutral_pulse);
@@ -62,5 +89,8 @@ int main(int argc, char** argv) {
     RUN_TEST(test_offset_shifts_pulse_linearly);
     RUN_TEST(test_extreme_servo_deg_clamps_to_envelope);
     RUN_TEST(test_extreme_offset_clamps_to_envelope);
+    RUN_TEST(test_pulse_at_neutral_gives_zero_degrees);
+    RUN_TEST(test_pulse_to_deg_matches_bench_envelope_endpoints);
+    RUN_TEST(test_pulse_to_deg_is_the_inverse_of_angle_to_pulse_at_zero_offset);
     return UNITY_END();
 }

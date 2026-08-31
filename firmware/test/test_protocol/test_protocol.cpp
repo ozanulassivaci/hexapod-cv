@@ -357,8 +357,8 @@ void test_encode_telemetry_with_profiles(void) {
     }
     t.profiles[3].offsetUs = 20;
     t.profiles[3].sign = -1;
-    t.profiles[3].hasMinPulse = true;
-    t.profiles[3].minPulseUs = 950;
+    t.profiles[3].hasMinDeg = true;
+    t.profiles[3].minDegFromNeutral = -49.5f;
     std::strncpy(t.profiles[3].note, "buzzes", sizeof(t.profiles[3].note) - 1);
 
     uint8_t buf[4096];
@@ -373,13 +373,13 @@ void test_encode_telemetry_with_profiles(void) {
     JsonObjectConst p3 = profiles[3];
     TEST_ASSERT_EQUAL(20, p3["offset_us"].as<int>());
     TEST_ASSERT_EQUAL(-1, p3["sign"].as<int>());
-    TEST_ASSERT_EQUAL(950, p3["min_pulse_us"].as<int>());
-    TEST_ASSERT_TRUE(p3["max_pulse_us"].isNull());
+    TEST_ASSERT_EQUAL_FLOAT(-49.5f, p3["min_deg_from_neutral"].as<float>());
+    TEST_ASSERT_TRUE(p3["max_deg_from_neutral"].isNull());
     TEST_ASSERT_EQUAL_STRING("buzzes", p3["note"].as<const char*>());
 
     JsonObjectConst p0 = profiles[0];
-    TEST_ASSERT_TRUE(p0["min_pulse_us"].isNull());
-    TEST_ASSERT_TRUE(p0["max_pulse_us"].isNull());
+    TEST_ASSERT_TRUE(p0["min_deg_from_neutral"].isNull());
+    TEST_ASSERT_TRUE(p0["max_deg_from_neutral"].isNull());
 }
 
 int main(int argc, char** argv) {

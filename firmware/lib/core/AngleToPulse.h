@@ -21,3 +21,14 @@
 // around this joint's own neutral pulse, not a hardcoded global one.
 uint16_t angleToPulseUs(float servoDeg, float neutralServoDeg, uint16_t neutralPulseUs, int8_t sign,
                          int16_t offsetUs);
+
+// The inverse relationship, deliberately without sign/offsetUs: bench
+// mode commands and records raw pulses with no per-servo calibration
+// applied at all (main.cpp's BenchPulse/RecordLimit handlers), so a
+// bench-recorded mechanical limit is naturally in this nominal,
+// uncalibrated frame -- which is exactly what makes it transferable to
+// every unit of a given joint type regardless of that unit's own
+// offset_us (see ServoProfile.h's minDegFromNeutral/maxDegFromNeutral).
+// neutralPulseUs is joint-type-specific (ServoMap.h's
+// neutralPulseUsFor), not a hardcoded global one.
+float pulseUsToDegFromNeutral(uint16_t pulseUs, uint16_t neutralPulseUs);

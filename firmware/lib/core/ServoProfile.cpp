@@ -7,20 +7,20 @@ ServoProfile mergeOffsetSign(const ServoProfile& existing, int16_t offsetUs, int
     return updated;
 }
 
-bool mergeLimit(const ServoProfile& existing, LimitBound bound, uint16_t pulseUs, ServoProfile& out) {
+bool mergeLimit(const ServoProfile& existing, LimitBound bound, float degFromNeutral, ServoProfile& out) {
     ServoProfile updated = existing;
     if (bound == LimitBound::Min) {
-        if (updated.hasMaxPulse && pulseUs >= updated.maxPulseUs) {
+        if (updated.hasMaxDeg && degFromNeutral >= updated.maxDegFromNeutral) {
             return false;
         }
-        updated.hasMinPulse = true;
-        updated.minPulseUs = pulseUs;
+        updated.hasMinDeg = true;
+        updated.minDegFromNeutral = degFromNeutral;
     } else {
-        if (updated.hasMinPulse && pulseUs <= updated.minPulseUs) {
+        if (updated.hasMinDeg && degFromNeutral <= updated.minDegFromNeutral) {
             return false;
         }
-        updated.hasMaxPulse = true;
-        updated.maxPulseUs = pulseUs;
+        updated.hasMaxDeg = true;
+        updated.maxDegFromNeutral = degFromNeutral;
     }
     out = updated;
     return true;

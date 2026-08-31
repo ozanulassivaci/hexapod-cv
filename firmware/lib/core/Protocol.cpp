@@ -444,15 +444,15 @@ size_t encodeTelemetry(const Telemetry& t, uint8_t* outBuf, size_t outBufLen) {
             entry["servo_index"] = p.servoIndex;
             entry["offset_us"] = p.offsetUs;
             entry["sign"] = p.sign;
-            if (p.hasMinPulse) {
-                entry["min_pulse_us"] = p.minPulseUs;
+            if (p.hasMinDeg) {
+                entry["min_deg_from_neutral"] = p.minDegFromNeutral;
             } else {
-                entry["min_pulse_us"] = nullptr;
+                entry["min_deg_from_neutral"] = nullptr;
             }
-            if (p.hasMaxPulse) {
-                entry["max_pulse_us"] = p.maxPulseUs;
+            if (p.hasMaxDeg) {
+                entry["max_deg_from_neutral"] = p.maxDegFromNeutral;
             } else {
-                entry["max_pulse_us"] = nullptr;
+                entry["max_deg_from_neutral"] = nullptr;
             }
             entry["note"] = p.note;
         }

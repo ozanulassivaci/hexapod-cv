@@ -265,9 +265,18 @@ static void handleCommand(const Command& cmd, uint32_t seq, Telemetry& out) {
                 std::strncpy(out.error, "bench mode not armed", sizeof(out.error) - 1);
                 break;
             }
+            // Bench mode applies no calibration (docs/protocol.md Section
+            // 8) -- degFromNeutral is the same nominal conversion
+            // RecordLimit uses below, so a limit recorded on the bench
+            // compares correctly against a pulse commanded on the bench.
+            float degFromNeutral = 0.0f;
+            if (cmd.hasServoIndex) {
+                JointType joint = kServoMap[cmd.servoIndex].joint;
+                degFromNeutral = pulseUsToDegFromNeutral(cmd.pulseUs, neutralPulseUsFor(joint));
+            }
             const char* reason = nullptr;
-            bool applied = gatedDriver.commandPulse(cmd.board, cmd.channel, cmd.pulseUs,
-                                                      cmd.hasServoIndex, cmd.servoIndex, &reason);
+            bool applied = gatedDriver.commandPulse(cmd.board, cmd.channel, cmd.pulseUs, cmd.hasServoIndex,
+                                                      cmd.servoIndex, degFromNeutral, &reason);
             if (!applied) {
                 out.ok = false;
                 std::strncpy(out.error, reason, sizeof(out.error) - 1);
@@ -290,12 +299,14 @@ static void handleCommand(const Command& cmd, uint32_t seq, Telemetry& out) {
                 std::strncpy(out.error, "bench mode not armed", sizeof(out.error) - 1);
                 break;
             }
+            JointType joint = kServoMap[cmd.servoIndex].joint;
+            float degFromNeutral = pulseUsToDegFromNeutral(cmd.pulseUs, neutralPulseUsFor(joint));
             ServoProfile existing = profileStore.get(cmd.servoIndex);
             ServoProfile updated;
             LimitBound bound = cmd.boundIsMax ? LimitBound::Max : LimitBound::Min;
-            if (!mergeLimit(existing, bound, cmd.pulseUs, updated)) {
+            if (!mergeLimit(existing, bound, degFromNeutral, updated)) {
                 out.ok = false;
-                std::strncpy(out.error, "min_pulse_us must be < max_pulse_us", sizeof(out.error) - 1);
+                std::strncpy(out.error, "min_deg_from_neutral must be < max_deg_from_neutral", sizeof(out.error) - 1);
                 break;
             }
             profileStore.set(cmd.servoIndex, updated);
@@ -340,9 +351,9 @@ static bool driveGaitOutputs() {
     for (uint8_t legIndex = 0; legIndex < 6; ++legIndex) {
         ServoDeg servoDeg = toServoDeg(gaitEngine.state().legAngles[legIndex]);
         const JointOutput joints[3] = {
-            {JointType::Coxa, servoDeg.coxaDeg, 90.0f, NEUTRAL_PULSE_US},
-            {JointType::Femur, servoDeg.femurDeg, 90.0f, NEUTRAL_PULSE_US},
-            {JointType::Tibia, servoDeg.tibiaDeg, 0.0f, TIBIA_NEUTRAL_PULSE_US},
+            {JointType::Coxa, servoDeg.coxaDeg, neutralServoDegFor(JointType::Coxa), neutralPulseUsFor(JointType::Coxa)},
+            {JointType::Femur, servoDeg.femurDeg, neutralServoDegFor(JointType::Femur), neutralPulseUsFor(JointType::Femur)},
+            {JointType::Tibia, servoDeg.tibiaDeg, neutralServoDegFor(JointType::Tibia), neutralPulseUsFor(JointType::Tibia)},
         };
         for (const JointOutput& j : joints) {
             uint8_t servoIndex = servoIndexFor(legIndex, j.joint);
@@ -350,8 +361,12 @@ static bool driveGaitOutputs() {
             ServoProfile profile = profileStore.get(servoIndex);
             uint16_t pulseUs =
                 angleToPulseUs(j.servoDeg, j.neutralServoDeg, j.neutralPulseUs, profile.sign, profile.offsetUs);
+            // Enforcement compares degrees (before offsetUs/sign), not
+            // the pulse -- see GatedServoDriver.h.
+            float degFromNeutral = j.servoDeg - j.neutralServoDeg;
             const char* reason = nullptr;
-            bool applied = gatedDriver.commandPulse(entry.board, entry.channel, pulseUs, true, servoIndex, &reason);
+            bool applied = gatedDriver.commandPulse(entry.board, entry.channel, pulseUs, true, servoIndex,
+                                                      degFromNeutral, &reason);
             if (!applied) anyRefused = true;
         }
     }
@@ -485,7 +500,7 @@ static void processSerialLine(String line) {
             }
             const char* reason = nullptr;
             bool applied = gatedDriver.commandPulse(static_cast<uint8_t>(board), static_cast<uint8_t>(channel),
-                                                      static_cast<uint16_t>(pulseUs), false, 0, &reason);
+                                                      static_cast<uint16_t>(pulseUs), false, 0, 0.0f, &reason);
             if (!applied) {
                 Serial.print("rejected: ");
                 Serial.println(reason);
