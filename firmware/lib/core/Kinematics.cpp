@@ -1,5 +1,6 @@
 #include "Kinematics.h"
 
+#include <algorithm>
 #include <cmath>
 
 const LegGeometry kLegs[6] = {
@@ -15,19 +16,30 @@ float legMountAngleRad(const LegGeometry& leg) {
     return std::atan2(leg.originYMm, leg.originXMm);
 }
 
+JointAngles clampJointAngles(const JointAngles& angles) { return clampJointAnglesWithClip(angles).angles; }
+
 namespace {
-float clampf(float value, float lo, float hi) {
-    if (value < lo) return lo;
-    if (value > hi) return hi;
+float clampWithOvershoot(float value, float lo, float hi, float& overshootOut) {
+    if (value > hi) {
+        overshootOut = value - hi;
+        return hi;
+    }
+    if (value < lo) {
+        overshootOut = lo - value;
+        return lo;
+    }
+    overshootOut = 0.0f;
     return value;
 }
 }  // namespace
 
-JointAngles clampJointAngles(const JointAngles& angles) {
-    JointAngles out;
-    out.coxaDeg = clampf(angles.coxaDeg, kCoxaMinDeg, kCoxaMaxDeg);
-    out.femurDeg = clampf(angles.femurDeg, kFemurMinDeg, kFemurMaxDeg);
-    out.tibiaDeg = clampf(angles.tibiaDeg, kTibiaMinDeg, kTibiaMaxDeg);
+ClampResult clampJointAnglesWithClip(const JointAngles& angles) {
+    ClampResult out;
+    float coxaOver, femurOver, tibiaOver;
+    out.angles.coxaDeg = clampWithOvershoot(angles.coxaDeg, kCoxaMinDeg, kCoxaMaxDeg, coxaOver);
+    out.angles.femurDeg = clampWithOvershoot(angles.femurDeg, kFemurMinDeg, kFemurMaxDeg, femurOver);
+    out.angles.tibiaDeg = clampWithOvershoot(angles.tibiaDeg, kTibiaMinDeg, kTibiaMaxDeg, tibiaOver);
+    out.worstOvershootDeg = std::max({coxaOver, femurOver, tibiaOver});
     return out;
 }
 
@@ -52,6 +64,10 @@ Point3 forwardKinematics(const JointAngles& angles, const LegGeometry& leg, floa
 }
 
 JointAngles inverseKinematics(const Point3& target, const LegGeometry& leg, float originZMm) {
+    return inverseKinematicsWithClip(target, leg, originZMm).angles;
+}
+
+IkResult inverseKinematicsWithClip(const Point3& target, const LegGeometry& leg, float originZMm) {
     const float mountAngleRad = legMountAngleRad(leg);
     const float relativeX = target.x - leg.originXMm;
     const float relativeY = target.y - leg.originYMm;
@@ -68,8 +84,15 @@ JointAngles inverseKinematics(const Point3& target, const LegGeometry& leg, floa
 
     const float dMax = kFemurLengthMm + kTibiaLengthMm;
     const float dMin = std::fabs(kFemurLengthMm - kTibiaLengthMm);
-    if (d > dMax) d = dMax - 0.001f;
-    if (d < dMin) d = dMin + 0.001f;
+    float overshootMm = 0.0f;
+    if (d > dMax) {
+        overshootMm = d - dMax;
+        d = dMax - 0.001f;
+    }
+    if (d < dMin) {
+        overshootMm = dMin - d;
+        d = dMin + 0.001f;
+    }
 
     const float gammaRaw =
         std::acos((kFemurLengthMm * kFemurLengthMm + kTibiaLengthMm * kTibiaLengthMm - d * d) /
@@ -81,10 +104,11 @@ JointAngles inverseKinematics(const Point3& target, const LegGeometry& leg, floa
                                    (2.0f * kFemurLengthMm * d));
     const float beta = beta1 + beta2;
 
-    JointAngles out;
-    out.coxaDeg = std::atan2(localY, localX) * (180.0f / M_PI);
-    out.femurDeg = beta * (180.0f / M_PI);
-    out.tibiaDeg = gammaRaw * (180.0f / M_PI);  // raw gamma -- see toServoDeg() for -gamma
+    IkResult out;
+    out.angles.coxaDeg = std::atan2(localY, localX) * (180.0f / M_PI);
+    out.angles.femurDeg = beta * (180.0f / M_PI);
+    out.angles.tibiaDeg = gammaRaw * (180.0f / M_PI);  // raw gamma -- see toServoDeg() for -gamma
+    out.dOvershootMm = overshootMm;
     return out;
 }
 

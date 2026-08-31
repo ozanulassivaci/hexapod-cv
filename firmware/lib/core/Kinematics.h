@@ -57,8 +57,22 @@ struct JointAngles {
 
 // Every joint clamped, not just coxa -- closes ANALYSIS.md safety gap
 // #5.1. Apply after inverseKinematics(), before a result is ever used to
-// command hardware.
+// command hardware. Discards how far past a bound the input was -- call
+// clampJointAnglesWithClip() where that matters (the live gait loop's
+// telemetry).
 JointAngles clampJointAngles(const JointAngles& angles);
+
+struct ClampResult {
+    JointAngles angles;
+    float worstOvershootDeg = 0.0f;  // 0 if nothing needed clamping
+};
+
+// Same clamp as clampJointAngles(), plus the worst-offending joint's
+// overshoot in degrees -- mirrors robot/kinematics.py's
+// clamp_joint_angles_with_clip(). This is what makes ANALYSIS.md safety
+// gap #5.1's clamping observable instead of silently discarded; Gait.cpp
+// feeds it into GaitState's cumulative jointClipCount/jointClipWorstDeg.
+ClampResult clampJointAnglesWithClip(const JointAngles& angles);
 
 // Mirrors calculate_fk. originZMm is the leg's body-frame mount height
 // (typically 0) -- an explicit parameter, never packed into a reused
@@ -66,14 +80,30 @@ JointAngles clampJointAngles(const JointAngles& angles);
 // Vector.z).
 Point3 forwardKinematics(const JointAngles& angles, const LegGeometry& leg, float originZMm = 0.0f);
 
-// Mirrors calculate_ik. Rotates the target into the leg's local frame by
-// -mountAngleRad (a pure rotation, never a reflection -- ANALYSIS.md
-// Section 3's proof that no per-leg sign flip is needed for any leg),
-// clamps D into the reachable annulus before acos to avoid a domain
-// error. Returns raw (unclamped) angles in the same convention
-// forwardKinematics() consumes -- call clampJointAngles() and then
-// toServoDeg() before commanding hardware.
+// Mirrors calculate_ik. Returns raw (unclamped) angles in the same
+// convention forwardKinematics() consumes -- call clampJointAngles() and
+// then toServoDeg() before commanding hardware. See
+// inverseKinematicsWithClip() for the full rationale; this is a thin
+// wrapper that discards how far past dMax/dMin the pre-clamp target was.
 JointAngles inverseKinematics(const Point3& target, const LegGeometry& leg, float originZMm = 0.0f);
+
+struct IkResult {
+    JointAngles angles;
+    float dOvershootMm = 0.0f;  // 0 if the target was already reachable
+};
+
+// Same solve as inverseKinematics(), plus how far past dMax/dMin (mm)
+// the pre-clamp D was -- mirrors robot/kinematics.py's
+// inverse_kinematics_with_clip(). Rotates the target into the leg's
+// local frame by -mountAngleRad (a pure rotation, never a reflection --
+// ANALYSIS.md Section 3's proof that no per-leg sign flip is needed for
+// any leg), solves the femur/tibia planar 2-link problem via law of
+// cosines, clamping D into the reachable annulus before acos to avoid a
+// domain error. ANALYSIS.md Section 5.7 notes this clamp used to be
+// entirely silent; the overshoot returned here is what makes it
+// observable -- Gait.cpp feeds it into GaitState's cumulative
+// ikClipCount/ikClipWorstMm.
+IkResult inverseKinematicsWithClip(const Point3& target, const LegGeometry& leg, float originZMm = 0.0f);
 
 struct ServoDeg {
     float coxaDeg;

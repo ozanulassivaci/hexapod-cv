@@ -18,8 +18,10 @@ from robot.kinematics import (
     JointAngles,
     Point3,
     clamp_joint_angles,
+    clamp_joint_angles_with_clip,
     forward_kinematics,
     inverse_kinematics,
+    inverse_kinematics_with_clip,
     to_servo_deg,
 )
 
@@ -99,6 +101,66 @@ def test_unreachable_target_clamps_predictably_not_garbage():
     assert COXA_MIN_DEG <= clamped.coxa_deg <= COXA_MAX_DEG
     assert FEMUR_MIN_DEG <= clamped.femur_deg <= FEMUR_MAX_DEG
     assert TIBIA_MIN_DEG <= clamped.tibia_deg <= TIBIA_MAX_DEG
+
+
+# --- Clip overshoot reporting (ANALYSIS.md Section 5.7: was silent) --------
+
+
+def test_reachable_target_reports_zero_d_overshoot():
+    leg = LEGS[0]
+    near = Point3(x=leg.origin_x_mm + 150.0, y=leg.origin_y_mm, z=-80.0)
+    angles, overshoot_mm = inverse_kinematics_with_clip(near, leg)
+    assert overshoot_mm == 0.0
+    assert angles == inverse_kinematics(near, leg)
+
+
+def _target_at_d(leg, d: float) -> Point3:
+    """A target at raw coxa angle 0, exactly D away from this leg's coxa
+    joint along l_forward (z=0) -- mirrors _random_reachable_target's
+    frame construction above, but for a controlled/known D instead of a
+    uniformly sampled reachable one, so a test can assert an exact
+    expected overshoot instead of just "some positive number"."""
+    l_xy = d + 38.0  # + COXA_LENGTH_MM; d == l_forward here since theta == 0
+    c, s = math.cos(leg.mount_angle_rad), math.sin(leg.mount_angle_rad)
+    return Point3(leg.origin_x_mm + l_xy * c, leg.origin_y_mm + l_xy * s, 0.0)
+
+
+def test_unreachable_far_target_reports_matching_d_overshoot():
+    leg = LEGS[0]
+    far = _target_at_d(leg, _D_MAX + 50.0)
+    _, overshoot_mm = inverse_kinematics_with_clip(far, leg)
+    assert overshoot_mm == pytest.approx(50.0, abs=1e-3)
+
+
+def test_unreachable_near_target_reports_d_min_overshoot():
+    # d_min is unreachable for any of this leg's real footprint (l_forward
+    # alone already exceeds it -- see robot/gait.py's body-height
+    # derivation) but the mechanism itself must still work for an
+    # adversarial target constructed to actually land inside d_min.
+    leg = LEGS[0]
+    close = _target_at_d(leg, _D_MIN - 20.0)
+    _, overshoot_mm = inverse_kinematics_with_clip(close, leg)
+    assert overshoot_mm == pytest.approx(20.0, abs=1e-3)
+
+
+def test_in_bounds_angles_report_zero_joint_overshoot():
+    angles = JointAngles(coxa_deg=0.0, femur_deg=10.0, tibia_deg=-20.0)
+    clamped, worst_over_deg = clamp_joint_angles_with_clip(angles)
+    assert worst_over_deg == 0.0
+    assert clamped == angles
+
+
+def test_out_of_bounds_angles_report_matching_worst_overshoot():
+    angles = JointAngles(coxa_deg=COXA_MAX_DEG + 5.0, femur_deg=0.0, tibia_deg=0.0)
+    clamped, worst_over_deg = clamp_joint_angles_with_clip(angles)
+    assert clamped.coxa_deg == COXA_MAX_DEG
+    assert worst_over_deg == pytest.approx(5.0)
+
+
+def test_joint_overshoot_is_the_worst_of_the_three_not_the_first():
+    angles = JointAngles(coxa_deg=COXA_MAX_DEG + 1.0, femur_deg=FEMUR_MIN_DEG - 9.0, tibia_deg=0.0)
+    _, worst_over_deg = clamp_joint_angles_with_clip(angles)
+    assert worst_over_deg == pytest.approx(9.0)
 
 
 # --- Adversarial sweep: no NaN, no domain errors, ever --------------------

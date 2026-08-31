@@ -145,6 +145,55 @@ void test_to_servo_deg_convention(void) {
     TEST_ASSERT_FLOAT_WITHIN(1e-5f, 30.0f, servo.tibiaDeg);  // -gamma, not fabs(gamma)
 }
 
+// --- Clip overshoot reporting (ANALYSIS.md Section 5.7: was silent) -----
+
+// A target at raw coxa angle 0, exactly D away from this leg's coxa
+// joint along lForward (z=0) -- mirrors tests/test_kinematics.py's
+// _target_at_d, so a test can assert an exact expected overshoot instead
+// of just "some positive number".
+static Point3 targetAtD(const LegGeometry& leg, float d) {
+    const float lXy = d + kCoxaLengthMm;
+    const float mountAngleRad = legMountAngleRad(leg);
+    const float c = std::cos(mountAngleRad), s = std::sin(mountAngleRad);
+    return Point3{leg.originXMm + lXy * c, leg.originYMm + lXy * s, 0.0f};
+}
+
+void test_reachable_target_reports_zero_d_overshoot(void) {
+    IkResult result = inverseKinematicsWithClip(targetAtD(kLegs[0], 150.0f), kLegs[0]);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, result.dOvershootMm);
+}
+
+void test_unreachable_far_target_reports_matching_d_overshoot(void) {
+    const float dMax = kFemurLengthMm + kTibiaLengthMm;
+    IkResult result = inverseKinematicsWithClip(targetAtD(kLegs[0], dMax + 50.0f), kLegs[0]);
+    TEST_ASSERT_FLOAT_WITHIN(1e-2f, 50.0f, result.dOvershootMm);
+}
+
+void test_unreachable_near_target_reports_d_min_overshoot(void) {
+    const float dMin = std::fabs(kFemurLengthMm - kTibiaLengthMm);
+    IkResult result = inverseKinematicsWithClip(targetAtD(kLegs[0], dMin - 20.0f), kLegs[0]);
+    TEST_ASSERT_FLOAT_WITHIN(1e-2f, 20.0f, result.dOvershootMm);
+}
+
+void test_in_bounds_angles_report_zero_joint_overshoot(void) {
+    JointAngles angles{0.0f, 10.0f, -20.0f};
+    ClampResult result = clampJointAnglesWithClip(angles);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, result.worstOvershootDeg);
+}
+
+void test_out_of_bounds_angles_report_matching_worst_overshoot(void) {
+    JointAngles angles{kCoxaMaxDeg + 5.0f, 0.0f, 0.0f};
+    ClampResult result = clampJointAnglesWithClip(angles);
+    TEST_ASSERT_EQUAL_FLOAT(kCoxaMaxDeg, result.angles.coxaDeg);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 5.0f, result.worstOvershootDeg);
+}
+
+void test_joint_overshoot_is_the_worst_of_the_three_not_the_first(void) {
+    JointAngles angles{kCoxaMaxDeg + 1.0f, kFemurMinDeg - 9.0f, 0.0f};
+    ClampResult result = clampJointAnglesWithClip(angles);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, 9.0f, result.worstOvershootDeg);
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_golden_fk_cases);
@@ -156,5 +205,11 @@ int main(int argc, char** argv) {
     RUN_TEST(test_clamp_joint_angles_bounds);
     RUN_TEST(test_negative_l_forward_femur_clamped);
     RUN_TEST(test_to_servo_deg_convention);
+    RUN_TEST(test_reachable_target_reports_zero_d_overshoot);
+    RUN_TEST(test_unreachable_far_target_reports_matching_d_overshoot);
+    RUN_TEST(test_unreachable_near_target_reports_d_min_overshoot);
+    RUN_TEST(test_in_bounds_angles_report_zero_joint_overshoot);
+    RUN_TEST(test_out_of_bounds_angles_report_matching_worst_overshoot);
+    RUN_TEST(test_joint_overshoot_is_the_worst_of_the_three_not_the_first);
     return UNITY_END();
 }

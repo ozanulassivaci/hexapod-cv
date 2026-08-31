@@ -108,12 +108,32 @@ def clamp_joint_angles(angles: JointAngles) -> JointAngles:
     """Every joint clamped, not just coxa -- closes ANALYSIS.md safety
     gap #5.1 ("only the coxa angle is clamped... nothing catches it if
     the formula changes"). Applied after inverse_kinematics(), before a
-    result is ever used to command hardware."""
-    return JointAngles(
-        coxa_deg=max(COXA_MIN_DEG, min(COXA_MAX_DEG, angles.coxa_deg)),
-        femur_deg=max(FEMUR_MIN_DEG, min(FEMUR_MAX_DEG, angles.femur_deg)),
-        tibia_deg=max(TIBIA_MIN_DEG, min(TIBIA_MAX_DEG, angles.tibia_deg)),
-    )
+    result is ever used to command hardware. Discards how far past a
+    bound the input was -- call clamp_joint_angles_with_clip() where that
+    matters (the live gait loop's telemetry)."""
+    clamped, _ = clamp_joint_angles_with_clip(angles)
+    return clamped
+
+
+def clamp_joint_angles_with_clip(angles: JointAngles) -> tuple[JointAngles, float]:
+    """Same clamp as clamp_joint_angles(), plus the worst-offending
+    joint's overshoot in degrees (0.0 if nothing needed clamping). This
+    is what makes gap #5.1's clamping observable instead of silently
+    discarded -- robot/gait.py::step feeds it into GaitState's cumulative
+    joint_clip_count/joint_clip_worst_deg."""
+
+    def _clamp(value: float, lo: float, hi: float) -> tuple[float, float]:
+        if value > hi:
+            return hi, value - hi
+        if value < lo:
+            return lo, lo - value
+        return value, 0.0
+
+    coxa_deg, coxa_over = _clamp(angles.coxa_deg, COXA_MIN_DEG, COXA_MAX_DEG)
+    femur_deg, femur_over = _clamp(angles.femur_deg, FEMUR_MIN_DEG, FEMUR_MAX_DEG)
+    tibia_deg, tibia_over = _clamp(angles.tibia_deg, TIBIA_MIN_DEG, TIBIA_MAX_DEG)
+    worst_over_deg = max(coxa_over, femur_over, tibia_over)
+    return JointAngles(coxa_deg=coxa_deg, femur_deg=femur_deg, tibia_deg=tibia_deg), worst_over_deg
 
 
 def forward_kinematics(angles: JointAngles, leg: Leg, origin_z_mm: float = 0.0) -> Point3:
@@ -143,18 +163,30 @@ def forward_kinematics(angles: JointAngles, leg: Leg, origin_z_mm: float = 0.0) 
 
 
 def inverse_kinematics(target: Point3, leg: Leg, origin_z_mm: float = 0.0) -> JointAngles:
-    """Mirrors calculate_ik. Rotates the target into the leg's local
-    frame by -mount_angle_rad (a pure rotation, never a reflection --
-    ANALYSIS.md Section 3's proof that no per-leg sign flip is needed for
-    any of the six legs), solves the femur/tibia planar 2-link problem
-    via law of cosines, clamping D into the reachable annulus before
-    acos to avoid a domain error on an unreachable target (this clamp
-    happens silently, same as the reference -- ANALYSIS.md Section 5.7
-    notes this hides upstream bugs but doesn't itself misbehave).
+    """Mirrors calculate_ik. See inverse_kinematics_with_clip() for the
+    full rationale -- this is a thin wrapper that discards how far past
+    d_max/d_min the pre-clamp target was. Returns raw (unclamped) angles
+    in the same convention forward_kinematics() consumes -- call
+    clamp_joint_angles() and then to_servo_deg() before using the result
+    to command hardware."""
+    angles, _ = inverse_kinematics_with_clip(target, leg, origin_z_mm)
+    return angles
 
-    Returns raw (unclamped) angles in the same convention
-    forward_kinematics() consumes -- call clamp_joint_angles() and then
-    to_servo_deg() before using the result to command hardware."""
+
+def inverse_kinematics_with_clip(
+    target: Point3, leg: Leg, origin_z_mm: float = 0.0
+) -> tuple[JointAngles, float]:
+    """Same solve as inverse_kinematics(), plus how far past d_max/d_min
+    (mm) the pre-clamp D was -- 0.0 if the target was already reachable.
+    Rotates the target into the leg's local frame by -mount_angle_rad (a
+    pure rotation, never a reflection -- ANALYSIS.md Section 3's proof
+    that no per-leg sign flip is needed for any of the six legs), solves
+    the femur/tibia planar 2-link problem via law of cosines, clamping D
+    into the reachable annulus before acos to avoid a domain error on an
+    unreachable target. ANALYSIS.md Section 5.7 notes this clamp used to
+    be entirely silent; the overshoot returned here is what makes it
+    observable -- robot/gait.py::step feeds it into GaitState's
+    cumulative ik_clip_count/ik_clip_worst_mm."""
     relative_x = target.x - leg.origin_x_mm
     relative_y = target.y - leg.origin_y_mm
     relative_z = target.z - origin_z_mm
@@ -170,9 +202,12 @@ def inverse_kinematics(target: Point3, leg: Leg, origin_z_mm: float = 0.0) -> Jo
 
     d_max = FEMUR_LENGTH_MM + TIBIA_LENGTH_MM
     d_min = abs(FEMUR_LENGTH_MM - TIBIA_LENGTH_MM)
+    overshoot_mm = 0.0
     if d > d_max:
+        overshoot_mm = d - d_max
         d = d_max - 0.001
     if d < d_min:
+        overshoot_mm = d_min - d
         d = d_min + 0.001
 
     gamma_raw = math.acos(
@@ -187,4 +222,4 @@ def inverse_kinematics(target: Point3, leg: Leg, origin_z_mm: float = 0.0) -> Jo
     femur_deg = math.degrees(beta)
     tibia_deg = math.degrees(gamma_raw)  # raw gamma -- see to_servo_deg() for the -gamma servo write
 
-    return JointAngles(coxa_deg=coxa_deg, femur_deg=femur_deg, tibia_deg=tibia_deg)
+    return JointAngles(coxa_deg=coxa_deg, femur_deg=femur_deg, tibia_deg=tibia_deg), overshoot_mm
