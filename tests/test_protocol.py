@@ -82,7 +82,7 @@ def test_telemetry_round_trip_full():
         robot_assembled=True,
         last_applied=WalkCommand(vx=0.1, vy=0.2, speed=10.0),
         profiles=(
-            ServoProfile(0, 5, 1, 900, 2100, "buzzes at low end"),
+            ServoProfile(0, 5, 1, -40.0, 35.0, "buzzes at low end"),
             ServoProfile(1, -5, -1),
         ),
     )
@@ -223,7 +223,7 @@ def test_telemetry_decode_rejects_missing_robot_assembled():
 
 
 def test_write_offsets_wire_fields_exclude_limits_and_note():
-    profile = ServoProfile(0, offset_us=10, sign=-1, min_pulse_us=900, max_pulse_us=2100, note="hi")
+    profile = ServoProfile(0, offset_us=10, sign=-1, min_deg_from_neutral=-20.0, max_deg_from_neutral=30.0, note="hi")
     command = WriteOffsetsCommand(offsets=[profile])
     fields = command._wire_fields()
     assert fields == {"offsets": [{"servo_index": 0, "offset_us": 10, "sign": -1}]}
@@ -249,10 +249,10 @@ def test_write_offsets_wire_fields_exclude_limits_and_note():
         lambda: CalibrateCommand(servo_index=0, offset_us=501),
         lambda: CalibrateCommand(servo_index=0, offset_us=0, sign=0),
         lambda: ServoProfile(servo_index=18, offset_us=0),
-        lambda: ServoProfile(servo_index=0, min_pulse_us=1600, max_pulse_us=1400),
-        lambda: ServoProfile(servo_index=0, min_pulse_us=1500, max_pulse_us=1500),
-        lambda: ServoProfile(servo_index=0, min_pulse_us=BENCH_PULSE_MIN_US - 1),
-        lambda: ServoProfile(servo_index=0, max_pulse_us=BENCH_PULSE_MAX_US + 1),
+        lambda: ServoProfile(servo_index=0, min_deg_from_neutral=10.0, max_deg_from_neutral=-10.0),
+        lambda: ServoProfile(servo_index=0, min_deg_from_neutral=0.0, max_deg_from_neutral=0.0),
+        lambda: ServoProfile(servo_index=0, min_deg_from_neutral=-91.0),
+        lambda: ServoProfile(servo_index=0, max_deg_from_neutral=91.0),
         lambda: ServoProfile(servo_index=0, note="x" * (HEALTH_NOTE_MAX_LEN + 1)),
         lambda: BenchModeCommand(armed="yes"),
         lambda: BenchPulseCommand(board=0x42, channel=0, pulse_us=1500),
@@ -279,15 +279,18 @@ def test_boundary_values_are_accepted():
     CalibrateCommand(servo_index=0, offset_us=-500, sign=-1)
     CalibrateCommand(servo_index=17, offset_us=500, sign=1)
     PanTiltCommand(pan=-90.0, tilt=90.0)
-    ServoProfile(servo_index=0, min_pulse_us=BENCH_PULSE_MIN_US, max_pulse_us=BENCH_PULSE_MAX_US)
+    # servo_index=0 is a coxa (bipolar, servo_index % 3 == 0), whose legal
+    # degree-from-neutral range is exactly [-90, +90] -- the boundary
+    # equivalent of the old BENCH_PULSE_MIN_US/MAX_US pulse boundaries.
+    ServoProfile(servo_index=0, min_deg_from_neutral=-90.0, max_deg_from_neutral=90.0)
     BenchPulseCommand(board=0x40, channel=0, pulse_us=BENCH_PULSE_MIN_US)
     BenchPulseCommand(board=0x41, channel=15, pulse_us=BENCH_PULSE_MAX_US)
 
 
 def test_servo_profile_limits_default_to_none_not_a_fake_value():
     profile = ServoProfile(servo_index=0)
-    assert profile.min_pulse_us is None
-    assert profile.max_pulse_us is None
+    assert profile.min_deg_from_neutral is None
+    assert profile.max_deg_from_neutral is None
     assert profile.note == ""
 
 

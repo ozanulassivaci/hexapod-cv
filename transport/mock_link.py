@@ -46,6 +46,7 @@ from transport.protocol import (
     WalkCommand,
     WriteOffsetsCommand,
     next_sequence,
+    pulse_us_to_deg_from_neutral,
 )
 
 _MOTION_TYPES = (
@@ -186,8 +187,9 @@ class MockRobotLink(RobotLink):
                 return False, "calibration not armed", None
             # Merge onto the existing profile -- offset_us/sign only. A
             # calibrate/write_offsets write must never touch (or silently
-            # wipe) min_pulse_us/max_pulse_us/note, which are bench mode's
-            # concern and may already be recorded for this servo.
+            # wipe) min_deg_from_neutral/max_deg_from_neutral/note, which
+            # are bench mode's concern and may already be recorded for
+            # this servo.
             existing = self._profiles[command.servo_index]
             self._profiles[command.servo_index] = dataclasses.replace(
                 existing, offset_us=command.offset_us, sign=command.sign
@@ -232,9 +234,10 @@ class MockRobotLink(RobotLink):
                 return False, "bench mode not armed", None
             if command.servo_index is not None:
                 profile = self._profiles[command.servo_index]
-                if profile.min_pulse_us is not None and command.pulse_us < profile.min_pulse_us:
+                deg = pulse_us_to_deg_from_neutral(command.pulse_us, command.servo_index)
+                if profile.min_deg_from_neutral is not None and deg < profile.min_deg_from_neutral:
                     return False, "pulse below recorded min for this servo", None
-                if profile.max_pulse_us is not None and command.pulse_us > profile.max_pulse_us:
+                if profile.max_deg_from_neutral is not None and deg > profile.max_deg_from_neutral:
                     return False, "pulse above recorded max for this servo", None
             self._bench_armed_until = now + self._bench_arm_timeout_s
             return True, None, None
@@ -243,11 +246,12 @@ class MockRobotLink(RobotLink):
             if not bench_armed:
                 return False, "bench mode not armed", None
             existing = self._profiles[command.servo_index]
+            deg = pulse_us_to_deg_from_neutral(command.pulse_us, command.servo_index)
             try:
                 if command.bound == LimitBound.MIN:
-                    updated = dataclasses.replace(existing, min_pulse_us=command.pulse_us)
+                    updated = dataclasses.replace(existing, min_deg_from_neutral=deg)
                 else:
-                    updated = dataclasses.replace(existing, max_pulse_us=command.pulse_us)
+                    updated = dataclasses.replace(existing, max_deg_from_neutral=deg)
             except ProtocolError as exc:
                 return False, str(exc), None
             self._profiles[command.servo_index] = updated

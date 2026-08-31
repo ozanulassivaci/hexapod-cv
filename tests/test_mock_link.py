@@ -171,7 +171,7 @@ def test_read_offsets_defaults_to_zero_sign_one_and_no_recorded_limits():
     profiles = link.latest_telemetry().profiles
     assert len(profiles) == 18
     assert all(p.offset_us == 0 and p.sign == 1 for p in profiles)
-    assert all(p.min_pulse_us is None and p.max_pulse_us is None for p in profiles)
+    assert all(p.min_deg_from_neutral is None and p.max_deg_from_neutral is None for p in profiles)
 
 
 def test_read_offsets_always_allowed_even_unarmed():
@@ -310,8 +310,10 @@ def test_record_limit_round_trips_through_read():
     link.send(RecordLimitCommand(servo_index=6, bound=LimitBound.MAX, pulse_us=2050))
     link.send(ReadOffsetsCommand())
     profile = link.latest_telemetry().profiles[6]
-    assert profile.min_pulse_us == 950
-    assert profile.max_pulse_us == 2050
+    # servo_index=6 is a coxa (6 % 3 == 0, neutral=NEUTRAL_PULSE_US=1500):
+    # (950-1500)/(2000/180) = -49.5, (2050-1500)/(2000/180) = +49.5.
+    assert profile.min_deg_from_neutral == pytest.approx(-49.5)
+    assert profile.max_deg_from_neutral == pytest.approx(49.5)
 
 
 def test_record_limit_rejects_min_at_or_past_existing_max():
@@ -340,8 +342,10 @@ def test_calibrate_write_preserves_bench_recorded_limits_and_note():
     profile = link.latest_telemetry().profiles[5]
     assert profile.offset_us == 30
     assert profile.sign == -1
-    assert profile.min_pulse_us == 950
-    assert profile.max_pulse_us == 2050
+    # servo_index=5 is a tibia (5 % 3 == 2, neutral=TIBIA_NEUTRAL_PULSE_US=500):
+    # (950-500)/(2000/180) = 40.5, (2050-500)/(2000/180) = 139.5.
+    assert profile.min_deg_from_neutral == pytest.approx(40.5)
+    assert profile.max_deg_from_neutral == pytest.approx(139.5)
     assert profile.note == "slight buzz near max"
 
 

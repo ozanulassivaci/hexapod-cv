@@ -36,7 +36,38 @@ PCA9685_CHANNELS_PER_BOARD = 16
 BENCH_PULSE_MIN_US = 500
 BENCH_PULSE_MAX_US = 2500
 NEUTRAL_PULSE_US = 1500  # nominal hobby-servo center; per-unit correction is offset_us, applied later
+# Coxa/femur are bipolar around NEUTRAL_PULSE_US (servo command 90 = straight);
+# tibia is zero-based -- its horn is mounted so 0, not 90, is straight
+# (ANALYSIS.md Section 2's undocumented hardware coupling). Mirrors
+# firmware/include/Config.h's TIBIA_NEUTRAL_PULSE_US -- same
+# hand-copied-with-cross-reference pattern as NEUTRAL_PULSE_US/
+# BENCH_PULSE_MIN_US/MAX_US above (see scripts/gen_protocol_constants.py's
+# docstring for why this isn't codegen'd: a mismatch here is a rejected
+# command, not a misfired failsafe).
+TIBIA_NEUTRAL_PULSE_US = BENCH_PULSE_MIN_US
 HEALTH_NOTE_MAX_LEN = 500
+
+_US_PER_DEG = (BENCH_PULSE_MAX_US - BENCH_PULSE_MIN_US) / 180.0
+
+
+def neutral_pulse_us_for_servo(servo_index: int) -> int:
+    """Coxa/femur/tibia = servo_index % 3, matching ui/servo_names.py's
+    documented placeholder convention (real wiring comes from a future
+    SERVO_MAP, not yet assigned -- CLAUDE.md) and firmware's
+    ServoMap.h/neutralPulseUsFor(JointType). Joint index 2 is tibia;
+    0 and 1 (coxa, femur) share the bipolar convention."""
+    return TIBIA_NEUTRAL_PULSE_US if servo_index % 3 == 2 else NEUTRAL_PULSE_US
+
+
+def pulse_us_to_deg_from_neutral(pulse_us: int, servo_index: int) -> float:
+    """Nominal, uncalibrated conversion -- no sign/offset_us applied,
+    mirroring firmware's AngleToPulse::pulseUsToDegFromNeutral and bench
+    mode's own raw-pulse semantics (bench_pulse never applies a servo's
+    calibration, see docs/protocol.md Section 8). A bench-recorded
+    mechanical limit must transfer to every unit of this joint type
+    regardless of that specific unit's spline-mounting calibration --
+    see ServoProfile.min_deg_from_neutral."""
+    return (pulse_us - neutral_pulse_us_for_servo(servo_index)) / _US_PER_DEG
 
 FAULT_NONE = 0
 FAULT_LINK_TIMEOUT = 1 << 0
@@ -110,6 +141,12 @@ def _require_optional_int_range(name: str, value, lo: int, hi: int) -> None:
     if value is None:
         return
     _require_int_range(name, value, lo, hi)
+
+
+def _require_optional_range(name: str, value, lo: float, hi: float) -> None:
+    if value is None:
+        return
+    _require_range(name, value, lo, hi)
 
 
 def _field(fields: dict, name: str):
@@ -248,25 +285,42 @@ class CalibrateCommand(Command):
 class ServoProfile:
     """Everything known about one physical servo, keyed by servo_index.
     offset_us/sign are a correction, written only via CalibrateCommand/
-    WriteOffsetsCommand (calibration_mode gated). min_pulse_us/max_pulse_us
-    are a safety bound the firmware is meant to enforce on every command
-    regardless of source, written only via RecordLimitCommand (bench_mode
-    gated) -- both live in one record because they describe the same unit
-    and because splitting them risks the export/import files silently
-    drifting apart, but the two write paths stay separate on purpose (see
-    docs/protocol.md Section 1). note is a free-text health note, ungated
-    since it's advisory record-keeping, not something the firmware acts on.
+    WriteOffsetsCommand (calibration_mode gated). min_deg_from_neutral/
+    max_deg_from_neutral are a safety bound the firmware is meant to
+    enforce on every command regardless of source, written only via
+    RecordLimitCommand (bench_mode gated) -- both live in one record
+    because they describe the same unit and because splitting them risks
+    the export/import files silently drifting apart, but the two write
+    paths stay separate on purpose (see docs/protocol.md Section 1). note
+    is a free-text health note, ungated since it's advisory record-
+    keeping, not something the firmware acts on.
 
-    min_pulse_us/max_pulse_us are None until a bench session has recorded
-    them -- that must be distinguishable from "recorded as 0", so this is
-    not defaulted to a fake safe-looking number.
+    Degrees from this joint's own neutral (0 = neutral, matching
+    AngleToPulse's servoDeg-minus-neutralServoDeg convention), not
+    absolute pulse microseconds -- deliberately, so a limit measured once
+    on the single test leg (reference/ANALYSIS.md's bring-up plan)
+    transfers to all six servos of that joint type, each with its own
+    offset_us. offset_us's whole job is making "commanded at neutral"
+    mean the same physical pose on every unit regardless of that unit's
+    spline-mounting error, so a mechanical bound expressed relative to
+    neutral is unit-independent in exactly the way an absolute pulse
+    isn't -- see pulse_us_to_deg_from_neutral()'s docstring. Recorded via
+    RecordLimitCommand's pulse_us (what the operator actually verifies
+    safe on the bench, in raw hardware terms) and converted at the point
+    it's merged into a profile, not on the wire -- keeping pulse<->degree
+    conversion out of the wire format matches ANALYSIS.md Section 7's
+    "one leaf function" rule for pulse units in general.
+
+    None until a bench session has recorded a bound -- that must be
+    distinguishable from "recorded as 0", so this is not defaulted to a
+    fake safe-looking number.
     """
 
     servo_index: int
     offset_us: int = 0
     sign: int = 1
-    min_pulse_us: int | None = None
-    max_pulse_us: int | None = None
+    min_deg_from_neutral: float | None = None
+    max_deg_from_neutral: float | None = None
     note: str = ""
 
     def __post_init__(self) -> None:
@@ -279,19 +333,22 @@ class ServoProfile:
         )
         if self.sign not in (-1, 1):
             raise ProtocolError(f"sign must be -1 or 1, got {self.sign!r}")
-        _require_optional_int_range(
-            "min_pulse_us", self.min_pulse_us, BENCH_PULSE_MIN_US, BENCH_PULSE_MAX_US
-        )
-        _require_optional_int_range(
-            "max_pulse_us", self.max_pulse_us, BENCH_PULSE_MIN_US, BENCH_PULSE_MAX_US
-        )
+        # The valid degree-from-neutral range is joint-type-dependent --
+        # a tibia servo's neutral sits at one end of its pulse range
+        # (zero-based), not the middle (bipolar), so its legal range
+        # relative to neutral is [0, +180], not coxa/femur's [-90, +90].
+        deg_lo = pulse_us_to_deg_from_neutral(BENCH_PULSE_MIN_US, self.servo_index)
+        deg_hi = pulse_us_to_deg_from_neutral(BENCH_PULSE_MAX_US, self.servo_index)
+        _require_optional_range("min_deg_from_neutral", self.min_deg_from_neutral, deg_lo, deg_hi)
+        _require_optional_range("max_deg_from_neutral", self.max_deg_from_neutral, deg_lo, deg_hi)
         if (
-            self.min_pulse_us is not None
-            and self.max_pulse_us is not None
-            and self.min_pulse_us >= self.max_pulse_us
+            self.min_deg_from_neutral is not None
+            and self.max_deg_from_neutral is not None
+            and self.min_deg_from_neutral >= self.max_deg_from_neutral
         ):
             raise ProtocolError(
-                f"min_pulse_us ({self.min_pulse_us}) must be < max_pulse_us ({self.max_pulse_us})"
+                f"min_deg_from_neutral ({self.min_deg_from_neutral}) must be < "
+                f"max_deg_from_neutral ({self.max_deg_from_neutral})"
             )
         if not isinstance(self.note, str):
             raise ProtocolError(f"note must be a string, got {self.note!r}")
@@ -303,8 +360,8 @@ class ServoProfile:
             "servo_index": self.servo_index,
             "offset_us": self.offset_us,
             "sign": self.sign,
-            "min_pulse_us": self.min_pulse_us,
-            "max_pulse_us": self.max_pulse_us,
+            "min_deg_from_neutral": self.min_deg_from_neutral,
+            "max_deg_from_neutral": self.max_deg_from_neutral,
             "note": self.note,
         }
 
@@ -317,8 +374,8 @@ class ServoProfile:
                 servo_index=data["servo_index"],
                 offset_us=data.get("offset_us", 0),
                 sign=data.get("sign", 1),
-                min_pulse_us=data.get("min_pulse_us"),
-                max_pulse_us=data.get("max_pulse_us"),
+                min_deg_from_neutral=data.get("min_deg_from_neutral"),
+                max_deg_from_neutral=data.get("max_deg_from_neutral"),
                 note=data.get("note", ""),
             )
         except KeyError as exc:
@@ -359,8 +416,9 @@ class WriteOffsetsCommand(Command):
     """Bulk restore of offset_us/sign, e.g. from a GUI-exported YAML file.
     Requires calibration mode armed, same as CalibrateCommand. Exists so a
     bad calibration session is a five-second bulk restore, not 18
-    individual re-sends. Does not touch min_pulse_us/max_pulse_us/note even
-    though ServoProfile carries them -- those are bench mode's concern."""
+    individual re-sends. Does not touch min_deg_from_neutral/
+    max_deg_from_neutral/note even though ServoProfile carries them --
+    those are bench mode's concern."""
 
     TYPE: ClassVar[CommandType] = CommandType.WRITE_OFFSETS
     offsets: tuple
@@ -414,13 +472,15 @@ class BenchPulseCommand(Command):
     board/channel is "what am I driving", independent of servo_index
     ("what am I recording"), see docs/protocol.md Section 8. servo_index
     is optional: a loose bench servo hasn't necessarily been assigned a
-    leg position yet. When given, it lets the receiver enforce that
-    servo's recorded min/max_pulse_us (if any) against this pulse --
-    firmware's GatedServoDriver does this unconditionally; MockRobotLink
-    mirrors it for parity (see transport/mock_link.py). Bounds on
-    pulse_us are the generic hobby-servo envelope, not a per-unit safety
-    limit; the GUI additionally narrows its own slider to a servo's
-    recorded min/max_pulse_us once known. Requires bench mode armed."""
+    leg position yet. When given, it lets the receiver convert this pulse
+    to degrees from that servo's own neutral and enforce that servo's
+    recorded min/max_deg_from_neutral (if any) against it -- firmware's
+    GatedServoDriver does this unconditionally; MockRobotLink mirrors it
+    for parity (see transport/mock_link.py). Bounds on pulse_us are the
+    generic hobby-servo envelope, not a per-unit safety limit; the GUI's
+    slider does not currently narrow itself to a servo's recorded limit,
+    only the wire enforcement described above does. Requires bench mode
+    armed."""
 
     TYPE: ClassVar[CommandType] = CommandType.BENCH_PULSE
     board: int
