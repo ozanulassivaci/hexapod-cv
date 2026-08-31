@@ -9,7 +9,20 @@
 #include "Kinematics.h"
 
 constexpr float kStepLengthMm = 60.0f;
-constexpr float kStepHeightMm = 100.0f;
+
+// STEP_HEIGHT=100 was ported directly from the reference (a real,
+// measured bug there, not a porting error -- traced exactly: step_z =
+// sin(phase_norm*pi)*STEP_HEIGHT, no other scaling anywhere in the
+// chain; the reference's own position smoothing barely attenuates it,
+// and this port's slew-rate limiting attenuates it not at all, so
+// whatever this constant is IS the real achieved peak). At 100, real
+// peak foot lift puts the foot above the coxa mounting plane at every
+// sane standing height. 20mm sits inside "typical hexapod swing height
+// (20-40mm)" with ~10mm of clearance below the coxa plane even at the
+// shallowest configured stance during a full-speed walk -- see
+// robot/gait.py's STEP_HEIGHT_MM for the full derivation.
+constexpr float kStepHeightMm = 20.0f;
+
 constexpr float kRotationStepRad = 15.0f * 0.017453292519943295f;  // 15 deg in radians
 
 // Cycles/second at speed=100 -- matches the reference's t += 0.015 per
@@ -17,13 +30,21 @@ constexpr float kRotationStepRad = 15.0f * 0.017453292519943295f;  // 15 deg in 
 // validated at.
 constexpr float kBasePhaseRateHz = 1.5f;
 
-// Body height (0..100) linearly maps onto this home.z range. Placeholder
-// bracketing the reference's compile-time DEFAULT_Z=-40mm -- narrow once
-// real reachability/ground-clearance data exists (see
-// tests/test_gait.py::test_body_height_reachability_not_silently_clamped_at_extremes,
-// mirrored in this module's own native test).
-constexpr float kBodyHeightZCrouchedMm = -20.0f;  // height=0
-constexpr float kBodyHeightZTallMm = -150.0f;  // height=100
+// Body height (0..100) linearly maps onto this home.z range. Chosen by
+// sweeping D (leg extension) and torque-sensitivity across the full
+// theoretical range for this leg's home footprint -- D_min (fully
+// folded) is unreachable at any height here, D_max (fully extended, a
+// kinematic singularity) is the real constraint the old range
+// (-20/-150) got too close to (93% of max reach standing still, and gait
+// motion pushed it over entirely in a full envelope sweep). This range
+// keeps the worst case at 5.4% margin from D_max with zero clipping
+// across the same sweep, and is centered near the best-conditioned point
+// (tibia raw angle ~ -90 deg). Costs 40mm of max standing height and
+// 10mm of min crouch; walking dynamics are untouched. See
+// robot/gait.py's BODY_HEIGHT_Z_CROUCHED_MM/TALL_MM for the full
+// derivation.
+constexpr float kBodyHeightZCrouchedMm = -30.0f;  // height=0
+constexpr float kBodyHeightZTallMm = -110.0f;  // height=100
 
 // Per-joint slew-rate bound, degrees/second -- see robot/gait.py's
 // MAX_SLEW_DEG_PER_S for the full rationale (ANALYSIS.md safety gap #3).

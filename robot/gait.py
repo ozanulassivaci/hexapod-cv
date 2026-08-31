@@ -32,7 +32,26 @@ from robot.kinematics import (
 )
 
 STEP_LENGTH_MM = 60.0
-STEP_HEIGHT_MM = 100.0
+
+# STEP_HEIGHT_MM=100 was ported directly from the reference's STEP_HEIGHT
+# constant (Hexapod_Arduino.ino line 81) -- a real, measured bug in the
+# reference, not a porting error. Traced exactly: step_z =
+# sin(phase_norm*pi)*STEP_HEIGHT, added directly to home.z with no other
+# scaling anywhere in the chain; the reference's own exponential position
+# smoothing (WALK_SMOOTHING_FACTOR=0.4) barely attenuates it (98.4% of
+# nominal survives in steady state, since the swing half-cycle is much
+# slower than the filter's settling time) and this port's slew-rate
+# limiting attenuates it not at all (verified: the achieved peak exactly
+# equals the nominal constant). At STEP_HEIGHT=100, real peak foot lift
+# is ~98-100mm -- enough to put the foot above the coxa mounting plane
+# at any of this project's sane standing heights. 20mm: comfortably
+# inside "typical hexapod swing height (20-40mm)", and leaves ~10mm of
+# clearance below the coxa plane even at the shallowest configured
+# stance (BODY_HEIGHT_Z_CROUCHED_MM below) during a full-speed walk --
+# the worst case, since step_z doesn't depend on speed/direction/rotation,
+# only phase.
+STEP_HEIGHT_MM = 20.0
+
 ROTATION_STEP_RAD = math.radians(15.0)
 
 # Cycles/second at speed=100 (speed_frac=1.0) -- matches the reference's
@@ -42,12 +61,24 @@ ROTATION_STEP_RAD = math.radians(15.0)
 BASE_PHASE_RATE_HZ = 1.5
 
 # Body height (0..100, WalkCommand's runtime command) linearly maps onto
-# this home.z range. DEFAULT_Z in the reference was a compile-time -40mm;
-# these bounds are placeholders bracketing it, not measured against an
-# assembled frame -- narrow once real reachability/ground-clearance data
-# exists, same caveat as the joint angle clamps in kinematics.py.
-BODY_HEIGHT_Z_CROUCHED_MM = -20.0  # height=0
-BODY_HEIGHT_Z_TALL_MM = -150.0  # height=100
+# this home.z range. Chosen (not the reference's compile-time DEFAULT_Z）
+# by sweeping D (leg extension) and joint-torque-sensitivity across the
+# full theoretical range for this leg's home footprint: D_min (fully
+# folded) turns out unreachable at any height here (home l_forward alone
+# already exceeds it), so the only real constraint is D_max (fully
+# extended, a kinematic singularity) -- the old range (-20/-150) sat at
+# 93% of max reach standing still and let gait motion push it over
+# entirely (0.06% of a full envelope sweep clipped, up to 8mm over
+# reach). This range keeps the worst case at 233.5mm of a 246.75mm max
+# (13.2mm / 5.4% margin, zero clipping across the same sweep) and is
+# centered near the best-conditioned point (tibia raw angle ~ -90 deg,
+# where the femur/tibia interior angle is closest to a right angle --
+# coincidentally almost exactly the reference's own DEFAULT_Z=-40mm).
+# Costs 40mm of maximum standing height and 10mm of minimum crouch;
+# walking dynamics (stride/strafe/turn -- coxa's whole envelope) are
+# untouched, since none of it depends on body height.
+BODY_HEIGHT_Z_CROUCHED_MM = -30.0  # height=0
+BODY_HEIGHT_Z_TALL_MM = -110.0  # height=100
 
 # Per-joint slew-rate bound, degrees/second. Placeholder set comfortably
 # under a typical MG996R's own unloaded slew rate (~350 deg/s) so it
