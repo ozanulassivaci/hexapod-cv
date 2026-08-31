@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from transport.protocol import Command, FAULT_NONE, Telemetry, has_fault
-from transport.protocol import FAULT_LINK_TIMEOUT, FAULT_ESTOP, FAULT_SERVO_FAULT, FAULT_BROWNOUT
+from transport.protocol import FAULT_LINK_TIMEOUT, FAULT_ESTOP, FAULT_SERVO_FAULT, FAULT_BROWNOUT, FAULT_IK_CLIP
 
 _CONNECTED_STYLE = "background-color: #1b5e20; color: white; padding: 4px; font-weight: bold;"
 _DISCONNECTED_STYLE = "background-color: #b71c1c; color: white; padding: 4px; font-weight: bold;"
@@ -42,6 +42,7 @@ _FAULT_NAMES = [
     (FAULT_ESTOP, "ESTOP"),
     (FAULT_SERVO_FAULT, "SERVO_FAULT"),
     (FAULT_BROWNOUT, "BROWNOUT"),
+    (FAULT_IK_CLIP, "IK_CLIP"),
 ]
 
 
@@ -119,11 +120,22 @@ class ControlPanel(QWidget):
         self._last_applied_label.setWordWrap(True)
         self._gait_phase_label = QLabel("gait phase: n/a")
         self._fault_flags_label = QLabel("faults: none")
+        # Cumulative since the robot's gait engine last reset (see
+        # Telemetry.ik_clip_count's docstring), not since this GUI
+        # connected -- reconnecting to an already-running robot can show
+        # a nonzero count from before this session started. The
+        # IK_CLIP fault name above (faults: line) is the "is it
+        # happening right now" signal; these are the "how much/how bad"
+        # diagnostic detail behind it.
+        self._ik_clip_label = QLabel("IK clip: 0 (worst 0.0mm)")
+        self._joint_clip_label = QLabel("joint clip: 0 (worst 0.0°)")
         for label in (
             self._rtt_label,
             self._last_applied_label,
             self._gait_phase_label,
             self._fault_flags_label,
+            self._ik_clip_label,
+            self._joint_clip_label,
         ):
             label.setFocusPolicy(Qt.NoFocus)
             layout.addWidget(label)
@@ -248,6 +260,8 @@ class ControlPanel(QWidget):
             self._last_applied_label.setText("last applied: n/a")
             self._gait_phase_label.setText("gait phase: n/a")
             self._fault_flags_label.setText("faults: n/a")
+            self._ik_clip_label.setText("IK clip: n/a")
+            self._joint_clip_label.setText("joint clip: n/a")
             self.set_safety_mode(None)
             return
 
@@ -258,6 +272,12 @@ class ControlPanel(QWidget):
             f"gait phase: {phase:.2f}" if phase is not None else "gait phase: n/a"
         )
         self._fault_flags_label.setText(f"faults: {_fault_flags_text(telemetry.fault_flags)}")
+        self._ik_clip_label.setText(
+            f"IK clip: {telemetry.ik_clip_count} (worst {telemetry.ik_clip_worst_mm:.1f}mm)"
+        )
+        self._joint_clip_label.setText(
+            f"joint clip: {telemetry.joint_clip_count} (worst {telemetry.joint_clip_worst_deg:.1f}°)"
+        )
         self.set_safety_mode(telemetry.robot_assembled)
 
     def set_current_intent(self, command: Command) -> None:
