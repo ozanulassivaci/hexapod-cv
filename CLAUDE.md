@@ -2,16 +2,27 @@
 
 ## Purpose and phase
 
-Vision and control pipeline for a hexapod robot. Currently **Phase 1**:
-camera ingest (MJPEG over WiFi from DroidCam) plus color-based object
-detection (HSV) on the PC. No robot hardware is assembled yet — nothing is
-built, so all code in this repo must run and be fully testable with zero
-hardware attached.
+Vision and control pipeline for a hexapod robot. Phase 1 (camera ingest,
+HSV detection) and the bulk of Phase 2 are built and tested: ESP32-S3
+firmware with a real gait/IK control loop (`firmware/lib/core/`), an
+operator GUI replacing the RC transmitter (`app.py`, `ui/`), a Python
+gait/IK reference the firmware is ported from and cross-checked against
+(`robot/`), a software simulator (`simulator/`), and AUTO_TRACK closing
+the full camera → detection → tracker → gait loop end to end
+(`simulator/synthetic_camera.py`). All of it runs and is tested with zero
+hardware attached — mocked or simulated (`MockRobotLink`, `SimRobotLink`,
+`SyntheticCameraStream`) — this requirement doesn't relax as hardware
+work starts.
 
-Later phases (not yet started, seams should exist but not be filled in):
-YOLOv8 detection backend, PC GUI robot control replacing the RC transmitter
-entirely, ESP32-S3 firmware for gait/IK/servo output, vision-guided
-locomotion tying detection output to robot commands.
+**Hardware status: servos have arrived, nothing is assembled yet.**
+Bring-up is one leg first, not all six at once — compute neutral servo
+angles from the kinematics, print and assemble a single test leg,
+discover real mechanical limits on that one leg, only then commit to the
+full 18-servo build. See `reference/ANALYSIS.md` and `docs/protocol.md`
+for what's implemented and why.
+
+Not yet started: YOLOv8 detection backend (the `Detector` ABC already
+supports swapping it in without touching stream/display code).
 
 ## Hardware
 
@@ -26,9 +37,9 @@ locomotion tying detection output to robot commands.
   640x480
 - Optional, not yet in scope: SSD1306/SSD1309 OLED face; mini pan-tilt on
   spare PCA9685 channels
-- Nothing is assembled. Every module must have a hardware-free path to run
-  and test (mocks, synthetic data) — this is a hard requirement, not a
-  nice-to-have.
+- Nothing is assembled yet; servos have arrived. Every module must have a
+  hardware-free path to run and test (mocks, synthetic data) — this is a
+  hard requirement, not a nice-to-have.
 
 ## Architecture rules
 
@@ -43,21 +54,43 @@ locomotion tying detection output to robot commands.
   function needs a socket or a Qt widget to be exercised, it's in the wrong
   module.
 - Network/hardware links are treated as high-latency and unreliable by
-  design, not as an edge case. `MJPEGStream` already establishes the
-  pattern (background thread, always serve the latest frame, drop stale
-  ones instead of queuing) — the future `RobotLink`/ESP32 side follows the
-  same principle for commands: the control loop free-runs at a fixed rate
-  off the latest received command, it does not wait on or get paced by
-  packet arrival. See `reference/ANALYSIS.md` §7 for the full reasoning.
+  design, not as an edge case. `MJPEGStream` established the pattern
+  (background thread, always serve the latest frame, drop stale ones
+  instead of queuing); firmware's control loop (`firmware/src/main.cpp`)
+  and `SimRobotLink`/`SyntheticCameraStream` follow the same principle —
+  free-run at a fixed rate off the latest received command/frame, never
+  wait on or get paced by packet/frame arrival. See `reference/ANALYSIS.md`
+  §7 for the full reasoning.
 - Degrees (or radians internally, degrees at boundaries) everywhere in
   kinematics code. PCA9685 tick/pulse conversion lives in exactly one
-  leaf-level function, parameterized by a per-channel calibration record —
-  it never leaks into IK/gait/FK.
-- Servo hardware addressing (board address, channel, pulse calibration,
-  sign, trim) is channel-scoped and lives in a flat `SERVO_MAP`-style
-  table, not inside per-leg structs. Per-leg structs hold kinematic
-  identity only (mount origin, mount angle, segment lengths, current
-  target) and reference into the map by servo ID.
+  leaf-level function (`firmware/lib/core/AngleToPulse.cpp`), parameterized
+  by a per-channel calibration record — it never leaks into IK/gait/FK.
+- Servo hardware addressing (board address, channel) is channel-scoped and
+  lives in a flat `SERVO_MAP`-style table (`firmware/lib/core/ServoMap.h`
+  — currently placeholder wiring, fill in after assembly), not inside
+  per-leg structs. Per-leg structs (`Kinematics.h`'s `LegGeometry`) hold
+  kinematic identity only (mount origin, segment lengths) and reference
+  into the map by servo ID. Per-servo calibration (offset, sign,
+  bench-recorded limits) lives in `ServoProfile`/NVS, keyed by servo
+  index, not in either of the above.
+- Kinematics and gait math exist as two independent implementations —
+  Python (`robot/kinematics.py`, `robot/gait.py`) and firmware C++
+  (`firmware/lib/core/Kinematics.cpp`, `Gait.cpp`) — kept in lockstep via
+  generated golden fixtures (`scripts/gen_kinematics_golden.py`,
+  `scripts/gen_gait_golden.py` → `tests/fixtures/*_golden.json` and
+  firmware's generated `golden_data.h`), not shared through a compiled
+  extension. See `reference/ANALYSIS.md` §7 for why. If you change the
+  math on one side, port the change to the other and regenerate the
+  fixtures — a stale fixture means the two sides can silently drift.
+- Every fault-triggered safe state (link timeout, OTA start, AP-fallback)
+  goes through `firmware/lib/core/SafeState.h`'s `enterSafeState()` — no
+  other code path may release or hold servos directly on a fault. Its
+  behavior is selected once, at compile time, by `Config.h`'s
+  `ROBOT_ASSEMBLED` flag: `Bench` (default) releases every servo;
+  `Assembled` holds the last commanded position by simply not computing or
+  sending a new one. This is a build flag, not a runtime command, and
+  deliberately not cross-checked against physical reality — see
+  `docs/protocol.md` §9 before changing that.
 
 ## Conventions
 
@@ -112,8 +145,11 @@ working late.
 `reference/Hexapod_Arduino.ino` and `reference/Controller_Arduino_Code.ino`
 are the original MIT-licensed (Emre Kalem, 2025) AVR/NRF24 firmware for
 this chassis. Full critical analysis: `reference/ANALYSIS.md` — read it
-before touching gait/IK/robot-link code. Summary of what's being kept vs.
-deliberately changed on port:
+before touching gait/IK/robot-link code. The port is done (both
+`robot/kinematics.py`/`robot/gait.py` and their firmware C++ equivalents,
+`firmware/lib/core/Kinematics.cpp`/`Gait.cpp`); this is the record of what
+was kept vs. deliberately changed, and one item flagged below is still not
+built.
 
 **Kept as-is (verified correct):**
 - FK/IK math (`calculate_fk`/`calculate_ik`) — standard 3-DOF leg solve,
@@ -126,28 +162,32 @@ deliberately changed on port:
 - Tripod grouping by `legIndex % 2` — array order is consecutive around the
   physical ring, so this is the correct tripod pairing
 
-**Changed on port:**
-- `fabs(angles.z)` on the tibia → explicit `-angles.z` with a comment
-  stating the invariant it depends on (gamma is provably ≤ 0; see
-  `ANALYSIS.md` §2). Same output, fails loudly instead of silently if the
-  invariant is ever broken
+**Changed on port (all done unless noted):**
+- `fabs(angles.z)` on the tibia → explicit `-angles.z` (`to_servo_deg()` /
+  `toServoDeg()`), with a comment stating the invariant it depends on
+  (gamma is provably ≤ 0; see `ANALYSIS.md` §2). Same output, fails loudly
+  instead of silently if the invariant is ever broken
 - Bang-bang direction/rotation (`{-1, 0, +1}` thresholding of analog input)
-  → continuous scalar, used to scale step length and/or phase rate
-  proportionally
-- No strafing → add an independent lateral command axis
-- No runtime body height → make it a live command, not a `setup()`-time
-  constant
+  → continuous scalar (`speed` 0–100), scaling both step length and phase
+  rate together
+- No strafing → independent lateral command axis (`vy`)
+- No runtime body height → live command, mapped onto `home_z_mm()`'s range
+  at read time, not a `setup()`-time constant
 - `servoPins[3]` raw pin numbers → flat `SERVO_MAP` with board/channel
-  addressing and per-servo calibration (architecture rule above)
-- No link-timeout failsafe → required for the WiFi replacement of NRF24,
-  more urgent than it was for RC (`ANALYSIS.md` §5, §7)
-- Instant `write(90)` on boot, two unramped startup jumps → slow homing
-  ramp; optional one-leg-at-a-time wave test before gait is armed, as an
-  assembly-QA check (all six legs are the same part, so there's no L/R
-  question left — this only catches per-leg assembly/calibration variance,
-  e.g. a horn seated a spline tooth off) instead of finding it on the floor
-- `constrain()` only on the coxa angle → add explicit bounds on femur too
-  (tibia's bound is provable, see above, but keep it explicit)
+  addressing (architecture rule above); per-servo calibration lives
+  separately in `ServoProfile`
+- No link-timeout failsafe → implemented (`LinkWatchdog`,
+  `ANALYSIS.md` §5, §7)
+- Instant `write(90)` on boot, two unramped startup jumps → **partially
+  done.** A per-joint slew-rate limit (`MAX_SLEW_DEG_PER_S` /
+  `kMaxSlewDegPerS`) bounds every commanded angle change, closing the
+  "unramped jump" gap. The optional one-leg-at-a-time wave test before
+  gait is armed (an assembly-QA check for a horn seated a spline tooth
+  off) is **not built** — still a real gap if you're looking for it.
+- `constrain()` only on the coxa angle → explicit bounds on all three
+  joints (`clamp_joint_angles()`); femur/tibia bounds are currently
+  placeholders (full servo travel) pending real mechanical limits — see
+  the Test Leg bring-up work in "Purpose and phase"
 - NRF24/RF24 radio stack — dropped entirely, replaced by the PC GUI over
   WiFi. `Controller_Arduino_Code.ino` (RC transmitter) is not being ported
   at all, context only
