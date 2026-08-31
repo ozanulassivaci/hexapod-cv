@@ -108,10 +108,27 @@ autosave. Export before you close, every time, if the session mattered.
   before timing out the link. This is a real safety mismatch, not
   cosmetic — don't ignore it. If you see it, stop and figure out why before
   relying on the failsafe.
-- **Telemetry readout (RTT, last applied, gait phase, faults).** Your
-  diagnostic panel. If the robot "isn't doing anything," this is where you
-  look first: is the link even up (RTT), did the robot receive what you
-  think you sent (last applied), is it stuck in a fault state (faults).
+- **Telemetry readout (RTT, last applied, gait phase, faults, IK clip,
+  joint clip).** Your diagnostic panel. If the robot "isn't doing
+  anything," this is where you look first: is the link even up (RTT),
+  did the robot receive what you think you sent (last applied), is it
+  stuck in a fault state (faults).
+  - **faults** showing `IK_CLIP` means the gait engine's most recent
+    tick had to force a leg's target back inside what's actually
+    reachable, or a solved joint angle back inside its configured
+    bound. Today, with nothing yet assembled, that should never happen
+    during ordinary driving — the gait envelope was tuned to have zero
+    margin violations across the full range of speed/direction/turn/
+    height commands. If you see it, something is commanding gait
+    outside that verified-safe range; worth figuring out why before
+    trusting the robot's pose, not something to click past.
+  - **IK clip** / **joint clip** show the cumulative count and worst
+    overshoot (mm / degrees) behind that fault name, since the robot's
+    gait engine last reset (boot, or reconnecting to `--link-mode sim`)
+    — not since this window opened. A single old event from before you
+    connected can leave a nonzero count showing with the `IK_CLIP` fault
+    itself no longer active; the faults line is the "right now" signal,
+    these two are the "how much/how bad so far" detail behind it.
 - **WASD / arrow keys.** Walk. Holding a key keeps walking; releasing it
   stops. Two keys at once (like W+D) walks diagonally. Get it wrong and the
   robot walks the wrong direction — release the key, it stops immediately.

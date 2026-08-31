@@ -79,9 +79,11 @@ the robot not moving without plugging in USB":
 |---|---|---|
 | `seq_echo` | yes | Echo of the last processed command's sequence number. Confirms receipt and is the RTT anchor. |
 | `last_applied` | yes | Compact echo of the currently-active command. This is the single most useful field: it's what separates "the command never arrived" (link problem) from "it arrived and the robot is doing something else anyway" (firmware/actuation problem). |
-| `fault_flags` | yes (bitfield defined, mostly unset) | Cheap — one integer — and it's the difference between "mystery" and "immediate answer." Only `LINK_TIMEOUT` is meaningful without firmware; other bits (`ESTOP`, `SERVO_FAULT`, `BROWNOUT`) are reserved now so the wire format doesn't change when real fault sources exist. |
+| `fault_flags` | yes (bitfield defined, `LINK_TIMEOUT`/`SERVO_FAULT`/`IK_CLIP` set for real, `ESTOP`/`BROWNOUT` reserved) | Cheap — one integer — and it's the difference between "mystery" and "immediate answer." `ESTOP`/`BROWNOUT` are reserved now so the wire format doesn't change when those fault sources exist later. |
 | `gait_phase` | yes, nullable | One float. Narrows a "not moving" report to "control loop alive but leg output isn't happening" when link, echo, and faults all look fine. `null` when not walking. |
 | `rail_mv` | reserved, nullable, unpopulated | Needs an ADC + voltage divider that isn't in the current hardware list. Reserving the field now avoids a wire-format change later; nothing sets it yet, and this doc doesn't pretend otherwise. |
+| `ik_clip_count`, `ik_clip_worst_mm` | yes | Cumulative count and worst-case magnitude of IK's reachability clamp firing (a leg's foot target was outside the femur/tibia annulus) since the gait engine last reset. `IK_CLIP` in `fault_flags` is the "is it happening right now" signal derived from the same tick; these are the "how much/how bad" detail behind it. See §10. |
+| `joint_clip_count`, `joint_clip_worst_deg` | yes | Same idea, for the other IK clip mechanism: a solved joint angle outside its configured bound. Independent from the pair above — a target can be reachable in D but still solve to an out-of-bound joint angle, or vice versa. See §10. |
 | `ok`, `error` | yes | Result of the most recently processed command, *any* type, not just calibration. Generalizes the "ack round-trip" from §6 into the one reply mechanism telemetry already provides — a rejected `calibrate` (not armed, bad index) reports why here instead of failing silently. |
 | `calibration_armed` | yes | So a GUI can show current arm state continuously rather than inferring it from the last ack. |
 | `bench_armed` | yes | Same idea, for the separate bench-mode gate (§8) — a GUI must be able to show these two arm states independently, since they're independent gates. |
@@ -360,6 +362,50 @@ actually assembled is what catches a stale flag, not this system.
 `MockRobotLink`/`SimRobotLink` report a fixed, constructor-set value for
 the same reason (`MockRobotLink(robot_assembled=...)`; `SimRobotLink`
 always reports `False`, since nothing is assembled in simulation either).
+
+## 10. IK clip observability: counted always, warned only while gait is the only mode
+
+`inverse_kinematics()` has always had two silent clip mechanisms
+(`ANALYSIS.md` §5.7 flagged both, unfixed until now): D (leg extension)
+gets clamped into the femur/tibia-reachable annulus before `acos`, and
+each solved joint angle gets clamped to its configured bound. Both used
+to just discard how far past the bound the input was — a target 50mm
+past reach and a target 0.001mm past reach produced the identical,
+indistinguishable clamped output.
+
+`ik_clip_count`/`ik_clip_worst_mm` and `joint_clip_count`/
+`joint_clip_worst_deg` (§3's table) make both observable: cumulative
+per-leg-per-tick event counts plus the worst overshoot ever seen, since
+the gait engine last reset (boot, or `SimRobotLink` construction — never
+since the last packet, unlike most of this struct). `FAULT_IK_CLIP` in
+`fault_flags` is the derived, level-triggered summary of the same
+tick's result — set when the tick that just ran clipped either
+mechanism on any leg, cleared the next tick if it doesn't recur. The
+cumulative counters are the diagnostic detail; the fault bit is what a
+GUI actually alarms on.
+
+**Why a fault bit here, and not just a quiet counter.** The gait
+envelope this project's own `STEP_HEIGHT_MM`/`BODY_HEIGHT_Z_*`
+constants were tuned against has zero clip events across the full
+theoretical command space (every phase, direction, speed, rotation,
+body height — see `robot/gait.py`'s derivation comments). Given that,
+a clip firing during actual gait today is not routine operation — it
+means something diverged from the verified-safe envelope, which is
+exactly the kind of thing that can mean a servo driven into a
+mechanical stop with no other visible symptom. That's worth a real,
+glanceable warning, not a number buried in a details panel nobody
+opens until after something breaks.
+
+**This will need revisiting once Test Leg exploration mode exists.**
+Deliberately probing right up to and past a joint's limit is the entire
+point of that mode — `joint_clip` firing there is expected, routine,
+and would just be alarm-fatigue noise if treated the same as a clip
+during real gait (the identical failure mode §9 above rejected a
+cross-check signal over: a warning that fires during legitimate use
+trains the operator to ignore it). Whichever code adds that mode needs
+to stop setting `FAULT_IK_CLIP` while it's active — scoped there
+deliberately, not solved preemptively here, since that mode doesn't
+exist yet.
 
 ## Commands
 
