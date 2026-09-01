@@ -227,10 +227,22 @@ class SimRobotLink(RobotLink):
                 self._current_speed,
                 self._current_rotation,
             )
+            last_command_at = self._last_command_at
         idle = is_motion_idle(vx, vy, speed, rotation)
         snapshot = self.state.snapshot(connected=True)
         gait_phase = None if idle else snapshot.gait_phase
-        fault_flags = FAULT_IK_CLIP if snapshot.clipped_this_tick else 0
+        # Mirrors _run()'s own gaitShouldRun gate exactly (timed_out or
+        # bench_armed -> frozen, self.state.step() never called) -- while
+        # frozen, snapshot.clipped_this_tick is stale (whatever the last
+        # tick before freezing happened to be), not "nothing is
+        # happening right now". A stale FAULT_IK_CLIP stuck on through an
+        # entire bench-armed session (Test Leg exploration will be
+        # bench-gated too, once built) would misleadingly persist right
+        # when deliberately probing a joint's real limit is the routine,
+        # expected thing to do -- see docs/protocol.md Section 10.
+        timed_out = last_command_at is None or (time.monotonic() - last_command_at) > self._connection_timeout_s
+        gait_ticking = not timed_out and not mock_telemetry.bench_armed
+        fault_flags = FAULT_IK_CLIP if (gait_ticking and snapshot.clipped_this_tick) else 0
         # Always False -- nothing is assembled in the simulator either,
         # and there's no SafetyMode concept here to report otherwise (see
         # simulator/robot_state.py: gait freezing on timeout already

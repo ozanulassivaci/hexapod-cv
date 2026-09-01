@@ -104,6 +104,30 @@ def test_clip_stats_and_fault_bit_set_when_gait_actually_clips(monkeypatch):
     link.close()
 
 
+def test_fault_ik_clip_clears_once_bench_mode_freezes_gait(monkeypatch):
+    """A clip is only ever true "right now" while gait is actually
+    ticking. Arming bench mode freezes gait (_run()'s gaitShouldRun gate)
+    -- FAULT_IK_CLIP must clear at that point, not stay stuck on
+    reporting whatever gait was doing the instant before, which would
+    misleadingly persist through an entire Test Leg exploration session
+    later (deliberately probing a joint's real limit is the routine,
+    expected thing to do there -- see docs/protocol.md Section 10)."""
+    import robot.gait as gaitmod
+
+    monkeypatch.setattr(gaitmod, "STEP_LENGTH_MM", 1000.0)
+
+    link = SimRobotLink()
+    link.send(WalkCommand(vx=1.0, vy=0.0, speed=100))
+    time.sleep(_SETTLE_S)
+    assert link.latest_telemetry().fault_flags & FAULT_IK_CLIP != 0
+
+    link.send(StopCommand())
+    link.send(BenchModeCommand(armed=True))
+    time.sleep(_SETTLE_S)
+    assert link.latest_telemetry().fault_flags & FAULT_IK_CLIP == 0
+    link.close()
+
+
 def test_body_moves_forward_while_walking():
     link = SimRobotLink()
     link.send(WalkCommand(vx=1.0, vy=0.0, speed=100))
