@@ -283,6 +283,34 @@ bare-servo bring-up Bench Test covers.
   commands and holds a pulse, this commands nothing. Also fires
   automatically on the app's global EMERGENCY STOP and on closing the
   window, same as Bench Test's own servo.
+- **Side view / top view.** Two flat 2D views, not one 3D one — easier to
+  read at a glance, and each maps onto something already computed
+  elsewhere in this project. Side view is the femur/tibia plane, seen
+  from directly beside the leg (independent of which way coxa is
+  pointed). Top view is coxa's rotation, seen from above, with a line
+  whose length is the leg's current horizontal reach. Both update the
+  instant you click a step button or drive an IK target — not on some
+  delay.
+  - **The white stick figure** is the commanded pose, live. Each segment
+    is colored on its own: green (comfortably inside its safe limit),
+    amber (getting close), red (at or past it), or plain white/grey if
+    nothing's been marked for that joint yet — grey deliberately isn't
+    "assumed safe," it's "not assessed."
+  - **The blue wedge** is the gait envelope — what gait's own math would
+    actually ask that joint to do. If your marked limits don't
+    comfortably contain the blue wedge, gait will get pulses refused
+    once it's actually driving this leg.
+  - **The red wedge** is a forbidden zone — past a limit you've actually
+    marked. Nothing shows here until you've marked something.
+  - **The faint grey shape (side view only)** is roughly how far the
+    foot could reach given the joints' full nominal travel — context for
+    how much of the theoretical range you're actually using, not a
+    precise boundary.
+  - **"COMMANDED POSE — NOT MEASURED"**, directly under the views. There
+    is no position feedback anywhere in this system — nothing here can
+    tell you the real leg matches what's drawn. This is exactly the
+    situation where it wouldn't: the screen can look fine while the real
+    leg is bound against plastic.
 - **Joint mode / IK mode toggle.** Switches which set of controls is
   showing below. Both drive the same three servos through the same
   channel wiring above.
