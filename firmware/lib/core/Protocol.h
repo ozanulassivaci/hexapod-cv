@@ -34,6 +34,7 @@ enum class CommandType {
     WriteOffsets,
     BenchMode,
     BenchPulse,
+    BenchRelease,
     RecordLimit,
     BenchHealthNote,
     Ping,
@@ -75,7 +76,7 @@ struct Command {
     // write_offsets
     OffsetEntry offsetEntries[SERVO_COUNT];
     uint8_t offsetEntryCount = 0;
-    // bench_pulse
+    // bench_pulse / bench_release (board+channel shared by both)
     uint8_t board = 0;
     uint8_t channel = 0;
     uint16_t pulseUs = 0;

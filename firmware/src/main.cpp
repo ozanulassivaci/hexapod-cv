@@ -294,6 +294,22 @@ static void handleCommand(const Command& cmd, uint32_t seq, Telemetry& out) {
             break;
         }
 
+        case CommandType::BenchRelease: {
+            if (!benchGate.isArmed()) {
+                out.ok = false;
+                std::strncpy(out.error, "bench mode not armed", sizeof(out.error) - 1);
+                break;
+            }
+            // Goes limp -- no limit to check, nothing to enforce against
+            // going nowhere. Always reachable while armed, independent of
+            // any recorded bound (GatedServoDriver.h's docstring on
+            // BenchReleaseCommand explains why on the wire-format side).
+            gatedDriver.release(cmd.board, cmd.channel);
+            dwellGuard.reset(cmd.board, cmd.channel);
+            benchGate.refresh(nowS);
+            break;
+        }
+
         case CommandType::RecordLimit: {
             if (!benchGate.isArmed()) {
                 out.ok = false;

@@ -226,6 +226,24 @@ bool decodeBenchPulse(JsonVariantConst obj, DecodeResult& result) {
     return true;
 }
 
+bool decodeBenchRelease(JsonVariantConst obj, DecodeResult& result) {
+    Command& c = result.command;
+    long board, channel;
+    if (!getInt(obj, "board", board) || !getInt(obj, "channel", channel)) {
+        setError(result, "missing or invalid bench_release field");
+        return false;
+    }
+    if (board != PCA9685_ADDR_BOARD_A && board != PCA9685_ADDR_BOARD_B) {
+        setError(result, "unknown board address");
+        return false;
+    }
+    if (!requireRangeInt(result, "channel", channel, 0, PCA9685_CHANNELS_PER_BOARD - 1)) return false;
+
+    c.board = static_cast<uint8_t>(board);
+    c.channel = static_cast<uint8_t>(channel);
+    return true;
+}
+
 bool decodeRecordLimit(JsonVariantConst obj, DecodeResult& result) {
     Command& c = result.command;
     long servoIndex, pulseUs;
@@ -336,6 +354,9 @@ DecodeResult decodeCommand(const uint8_t* data, size_t len) {
     } else if (std::strcmp(type, "bench_pulse") == 0) {
         result.command.type = CommandType::BenchPulse;
         decoded = decodeBenchPulse(obj, result);
+    } else if (std::strcmp(type, "bench_release") == 0) {
+        result.command.type = CommandType::BenchRelease;
+        decoded = decodeBenchRelease(obj, result);
     } else if (std::strcmp(type, "record_limit") == 0) {
         result.command.type = CommandType::RecordLimit;
         decoded = decodeRecordLimit(obj, result);

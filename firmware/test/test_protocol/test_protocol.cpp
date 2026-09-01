@@ -140,6 +140,23 @@ void test_decode_bench_pulse_rejects_unknown_board(void) {
     TEST_ASSERT_FALSE(r.ok);
 }
 
+void test_decode_bench_release(void) {
+    DecodeResult r = decodeStr(R"({"v":1,"seq":1,"type":"bench_release","board":64,"channel":7})");
+    TEST_ASSERT_TRUE(r.ok);
+    TEST_ASSERT_EQUAL(64, r.command.board);
+    TEST_ASSERT_EQUAL(7, r.command.channel);
+}
+
+void test_decode_bench_release_rejects_unknown_board(void) {
+    DecodeResult r = decodeStr(R"({"v":1,"seq":1,"type":"bench_release","board":66,"channel":0})");
+    TEST_ASSERT_FALSE(r.ok);
+}
+
+void test_decode_bench_release_rejects_out_of_range_channel(void) {
+    DecodeResult r = decodeStr(R"({"v":1,"seq":1,"type":"bench_release","board":64,"channel":16})");
+    TEST_ASSERT_FALSE(r.ok);
+}
+
 void test_decode_record_limit_min(void) {
     DecodeResult r = decodeStr(R"({"v":1,"seq":1,"type":"record_limit","servo_index":3,"bound":"min","pulse_us":950})");
     TEST_ASSERT_TRUE(r.ok);
@@ -402,6 +419,9 @@ int main(int argc, char** argv) {
     RUN_TEST(test_decode_bench_pulse_without_servo_index);
     RUN_TEST(test_decode_bench_pulse_with_servo_index);
     RUN_TEST(test_decode_bench_pulse_rejects_unknown_board);
+    RUN_TEST(test_decode_bench_release);
+    RUN_TEST(test_decode_bench_release_rejects_unknown_board);
+    RUN_TEST(test_decode_bench_release_rejects_out_of_range_channel);
     RUN_TEST(test_decode_record_limit_min);
     RUN_TEST(test_decode_record_limit_max);
     RUN_TEST(test_decode_record_limit_rejects_unknown_bound);

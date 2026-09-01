@@ -27,6 +27,7 @@ from transport.protocol import (
     BenchHealthNoteCommand,
     BenchModeCommand,
     BenchPulseCommand,
+    BenchReleaseCommand,
     BodyHeightCommand,
     CalibrateCommand,
     CalibrationModeCommand,
@@ -239,6 +240,17 @@ class MockRobotLink(RobotLink):
                     return False, "pulse below recorded min for this servo", None
                 if profile.max_deg_from_neutral is not None and deg > profile.max_deg_from_neutral:
                     return False, "pulse above recorded max for this servo", None
+            self._bench_armed_until = now + self._bench_arm_timeout_s
+            return True, None, None
+
+        if isinstance(command, BenchReleaseCommand):
+            if not bench_armed:
+                return False, "bench mode not armed", None
+            # Nothing to track: this mock has no ServoOutput-equivalent
+            # simulating actual pulse state, so "going limp" has no
+            # observable effect here beyond the ack itself -- the
+            # accepted/rejected/armed-refresh contract is what matters
+            # for GUI development against this class.
             self._bench_armed_until = now + self._bench_arm_timeout_s
             return True, None, None
 

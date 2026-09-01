@@ -7,6 +7,7 @@ from transport.protocol import (
     BenchHealthNoteCommand,
     BenchModeCommand,
     BenchPulseCommand,
+    BenchReleaseCommand,
     BodyHeightCommand,
     CalibrateCommand,
     CalibrationModeCommand,
@@ -397,6 +398,33 @@ def test_bench_pulse_within_recorded_limits_accepted():
     link.send(RecordLimitCommand(servo_index=2, bound=LimitBound.MIN, pulse_us=1000))
     link.send(RecordLimitCommand(servo_index=2, bound=LimitBound.MAX, pulse_us=2000))
     link.send(BenchPulseCommand(board=0x40, channel=0, pulse_us=1500, servo_index=2))
+    assert link.latest_telemetry().ok is True
+
+
+def test_bench_release_rejected_when_bench_not_armed():
+    link = MockRobotLink()
+    link.send(BenchReleaseCommand(board=0x40, channel=0))
+    telemetry = link.latest_telemetry()
+    assert telemetry.ok is False
+    assert telemetry.error == "bench mode not armed"
+
+
+def test_bench_release_accepted_when_armed():
+    link = MockRobotLink()
+    link.send(BenchModeCommand(armed=True))
+    link.send(BenchReleaseCommand(board=0x40, channel=3))
+    assert link.latest_telemetry().ok is True
+
+
+def test_bench_release_refreshes_the_arm_window():
+    link = MockRobotLink(bench_arm_timeout_s=0.2)
+    link.send(BenchModeCommand(armed=True))
+    time.sleep(0.1)
+    link.send(BenchReleaseCommand(board=0x40, channel=0))  # refreshes window
+    time.sleep(0.15)
+    # Total elapsed since arm is 0.25s (> 0.2s timeout), but only 0.15s
+    # since the refresh -- should still be armed.
+    link.send(BenchReleaseCommand(board=0x40, channel=0))
     assert link.latest_telemetry().ok is True
 
 

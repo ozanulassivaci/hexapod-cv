@@ -126,6 +126,7 @@ class CommandType(str, Enum):
     WRITE_OFFSETS = "write_offsets"
     BENCH_MODE = "bench_mode"
     BENCH_PULSE = "bench_pulse"
+    BENCH_RELEASE = "bench_release"
     RECORD_LIMIT = "record_limit"
     BENCH_HEALTH_NOTE = "bench_health_note"
     PING = "ping"
@@ -532,6 +533,32 @@ class BenchPulseCommand(Command):
 
 
 @dataclass(frozen=True)
+class BenchReleaseCommand(Command):
+    """Goes limp: the PCA9685 stops outputting a pulse on this channel
+    entirely, the same as GatedServoDriver.release() (SafeState.h's
+    Bench-mode fault path, or the serial mirror's "bench release", which
+    predates this wire command and drove the same underlying call). Not
+    "park at neutral" -- that still commands a pulse and holds against
+    it; this commands nothing. Always reachable while bench mode is
+    armed, independent of any recorded limit -- there's nothing to
+    validate about going limp. board/channel addressed like
+    BenchPulseCommand ("what am I driving"), no servo_index: releasing
+    doesn't touch a profile, so there's nothing to look up one for."""
+
+    TYPE: ClassVar[CommandType] = CommandType.BENCH_RELEASE
+    board: int
+    channel: int
+
+    def __post_init__(self) -> None:
+        if self.board not in PCA9685_BOARD_ADDRESSES:
+            raise ProtocolError(f"board={self.board!r} not in {PCA9685_BOARD_ADDRESSES}")
+        _require_int_range("channel", self.channel, 0, PCA9685_CHANNELS_PER_BOARD - 1)
+
+    def _wire_fields(self) -> dict:
+        return {"board": self.board, "channel": self.channel}
+
+
+@dataclass(frozen=True)
 class RecordLimitCommand(Command):
     """Records a bench-discovered safe pulse bound into servo_index's
     profile. servo_index-scoped (not board/channel) because this is what
@@ -671,6 +698,11 @@ def _decode_bench_pulse(fields: dict) -> Command:
         pulse_us=_field(fields, "pulse_us"),
         servo_index=fields.get("servo_index"),
     )
+
+
+@_register(CommandType.BENCH_RELEASE)
+def _decode_bench_release(fields: dict) -> Command:
+    return BenchReleaseCommand(board=_field(fields, "board"), channel=_field(fields, "channel"))
 
 
 @_register(CommandType.RECORD_LIMIT)
