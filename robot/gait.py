@@ -91,6 +91,56 @@ NEUTRAL_STANCE_ANGLES = JointAngles(coxa_deg=0.0, femur_deg=45.0, tibia_deg=-90.
 
 DEFAULT_BODY_HEIGHT = 50.0
 
+# --- Gait envelope (first of three limit tiers -- see robot/safe_limit_check.py) --
+#
+# What gait's own math ever actually asks a joint to reach, across the
+# full commandable space (every phase, direction, speed, rotation, body
+# height) with the constants above -- informational only, never itself a
+# constraint on anything. This is the tier a mechanical limit (measured on
+# the single test leg, reference/ANALYSIS.md's bring-up plan -- stored as
+# transport.protocol.ServoProfile.min/max_deg_from_neutral) must fit
+# inside, with SAFE_LIMIT_MARGIN_DEG of room to spare, before it's safe to
+# let gait actually drive that joint. Firmware never reads these
+# constants -- GatedServoDriver enforces the *safe* limit (mechanical
+# minus margin) directly, at runtime, on every commanded pulse; this tier
+# exists for the design-time question "will that safe limit actually be
+# wide enough for what gait needs," checked once real mechanical data
+# exists (robot/safe_limit_check.py), not for any runtime path.
+#
+# Derived from a single-leg sweep (all 6 legs proven leg-invariant --
+# ANALYSIS.md Section 3/4) across 100 phase points x 36 directions x
+# {0, 0.5, 1.0} magnitude x 5 speeds x 5 rotations x 6 body heights
+# (1,095,000 samples, ~6s). Each bound rounded outward (away from zero
+# padding, i.e. min rounded down / max rounded up) to 3 decimal places so
+# the stored constant is never tighter than what was actually swept.
+# Regenerate by re-running that sweep (same shape as
+# tests/test_gait_envelope.py's own coarser live check, at full
+# resolution) whenever STEP_HEIGHT_MM, STEP_LENGTH_MM,
+# BODY_HEIGHT_Z_CROUCHED_MM/TALL_MM, or ROTATION_STEP_RAD change -- a
+# stale envelope here silently invalidates the "does the envelope fit
+# inside the safe limit" check without any test catching it, which is
+# exactly why that coarser live check exists.
+#
+# In degrees from this joint's own neutral (to_servo_deg()'s convention,
+# the same one transport.protocol.ServoProfile.min/max_deg_from_neutral
+# is stored in -- these constants exist specifically to be compared
+# against that field, see robot/safe_limit_check.py), NOT this module's
+# raw kinematic angle convention. Coxa/femur are identical between the
+# two conventions (to_servo_deg() only adds a constant 90, which cancels
+# against neutralServoDeg=90), so their bounds are the swept
+# JointAngles.coxa_deg/femur_deg extrema directly. Tibia is not: raw
+# tibia_deg is provably <= 0 (ANALYSIS.md Section 2's acos-range proof)
+# while to_servo_deg() negates it (tibiaServo = -tibiaDeg, neutral 0), so
+# tibia's degFromNeutral envelope is the *negation* of the swept raw
+# extrema, with min/max swapping accordingly -- swept raw tibia_deg
+# was [-114.372, -39.583]; negated and reordered, that's this pair.
+GAIT_ENVELOPE_COXA_MIN_DEG = -19.614
+GAIT_ENVELOPE_COXA_MAX_DEG = 19.615
+GAIT_ENVELOPE_FEMUR_MIN_DEG = -2.130
+GAIT_ENVELOPE_FEMUR_MAX_DEG = 70.473
+GAIT_ENVELOPE_TIBIA_MIN_DEG = 39.583
+GAIT_ENVELOPE_TIBIA_MAX_DEG = 114.372
+
 
 def home_xy_mm(leg: Leg) -> tuple[float, float]:
     """Body-frame (x, y) of this leg's neutral stance foot position --
