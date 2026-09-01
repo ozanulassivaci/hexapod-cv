@@ -25,6 +25,7 @@ no sense) unless sim was already selected.
 import argparse
 import sys
 
+from PySide6.QtCore import QSize
 from PySide6.QtWidgets import QApplication
 
 from control.tracker import Tracker
@@ -106,9 +107,24 @@ def main() -> None:
 
     app = QApplication(sys.argv)
     window = MainWindow(config, stream, detector, link, tracker)
-    window.resize(1100, 720)
+    window.resize(_default_window_size(app))
     window.show()
     sys.exit(app.exec())
+
+
+def _default_window_size(app: QApplication) -> QSize:
+    """Large but never bigger than the screen -- and nothing saved or
+    restored between runs, per design: this is a one-time default, not
+    remembered geometry."""
+    default = QSize(1600, 1000)
+    screen = app.primaryScreen()
+    if screen is None:
+        return default
+    available = screen.availableGeometry()
+    return QSize(
+        min(default.width(), int(available.width() * 0.9)),
+        min(default.height(), int(available.height() * 0.9)),
+    )
 
 
 if __name__ == "__main__":

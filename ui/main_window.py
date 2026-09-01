@@ -15,7 +15,8 @@ import time
 from enum import Enum, auto
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QHBoxLayout, QMainWindow, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtWidgets import QHBoxLayout, QMainWindow, QScrollArea, QTabWidget, QVBoxLayout, QWidget
 
 from control.tracker import Tracker
 from operator_config import OperatorConfig
@@ -60,6 +61,17 @@ _TURN_KEYS = {
 class Mode(Enum):
     MANUAL = auto()
     AUTO_TRACK = auto()
+
+
+def _scrollable(widget: QWidget) -> QScrollArea:
+    """Wrap widget in a vertically-scrolling area whose own minimum size
+    is small regardless of widget's -- see _build_layout's comment on
+    why QTabWidget needs this for its taller pages."""
+    area = QScrollArea()
+    area.setWidget(widget)
+    area.setWidgetResizable(True)
+    area.setFocusPolicy(Qt.NoFocus)
+    return area
 
 
 class MainWindow(QMainWindow):
@@ -114,6 +126,9 @@ class MainWindow(QMainWindow):
         self._build_layout()
         self._connect_signals()
 
+        self._fullscreen_shortcut = QShortcut(QKeySequence(Qt.Key_F11), self)
+        self._fullscreen_shortcut.activated.connect(self._toggle_fullscreen)
+
         self._tick_timer = QTimer(self)
         self._tick_timer.timeout.connect(self._on_tick)
         self._tick_timer.start(max(1, int(config.ui.tick_interval_s * 1000)))
@@ -133,8 +148,19 @@ class MainWindow(QMainWindow):
         tabs.setFocusPolicy(Qt.NoFocus)
         tabs.addTab(operate_tab, "Operate")
         tabs.addTab(self.calibration_tab, "Calibrate")
-        tabs.addTab(self.bench_tab, "Bench Test")
-        tabs.addTab(self.single_leg_tab, "Test Leg")
+        # QTabWidget's own minimumSizeHint is the largest of every page's
+        # minimumSizeHint, not just the current page's -- an always-tall
+        # page forces the whole window to that minimum height even while
+        # a much smaller tab (e.g. Operate) is what's showing. Bench Test
+        # and Test Leg are tall enough (many stacked control rows) to push
+        # that past what a typical laptop screen can offer. Wrapping them
+        # in a resizable QScrollArea keeps their *own* minimum small (a
+        # scroll area doesn't need to be as tall as its content) while
+        # their content keeps its natural size, growing to fill the tab
+        # when there's room and scrolling instead of being crushed when
+        # there isn't.
+        tabs.addTab(_scrollable(self.bench_tab), "Bench Test")
+        tabs.addTab(_scrollable(self.single_leg_tab), "Test Leg")
         if self.sim_view is not None:
             tabs.addTab(self.sim_view, "Simulator")
 
@@ -143,6 +169,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(tabs, 1)
         layout.addWidget(self.log_panel)
         self.setCentralWidget(central)
+
+    def _toggle_fullscreen(self) -> None:
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
 
     def _connect_signals(self) -> None:
         self.control_panel.body_height_changed.connect(self._on_body_height_changed)

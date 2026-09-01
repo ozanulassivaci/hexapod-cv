@@ -25,6 +25,30 @@ camera → detection → tracker → gait loop with nothing real anywhere in
 it — the fastest way to see the whole pipeline work, or to reproduce a
 tracking problem without a camera in hand. Implies `--link-mode sim`.
 
+## The window itself
+
+Opens at a large default size (90% of your screen's available area, capped
+at 1600x1000) and is freely resizable — drag an edge, use your window
+manager's maximise, or press **F11** to toggle true fullscreen (no window
+chrome at all; F11 again returns to normal). Nothing about size or
+position is remembered between runs — every launch starts from the same
+computed default.
+
+The video feed on the Operate tab and the two 2D views on the Test Leg
+tab grow with the window — those are the two places extra screen space
+actually helps. Everything else grows more modestly, sticking near a
+comfortable working size and leaving any extra space as margin rather
+than stretching a control table or a button row for no reason.
+
+The **Bench Test** and **Test Leg** tabs scroll if the window is too
+short to show everything at once (their content — several joints' worth
+of controls — is taller than any panel-sized share of a smaller window
+should be forced to be). On the Test Leg tab specifically, the Joint/IK
+mode controls near the bottom stay in their own small scrollable area
+even in a large window, on purpose: the 2D views above them are what
+benefits from a bigger window, so they get first claim on any extra
+height instead of splitting it with the controls below.
+
 ## The tabs, in one paragraph each
 
 **Operate** is for driving the robot: camera view on the left, controls on

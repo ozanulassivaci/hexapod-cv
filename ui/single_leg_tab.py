@@ -30,6 +30,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QStackedWidget,
     QVBoxLayout,
@@ -140,9 +142,33 @@ class SingleLegTab(QWidget):
         self._stack = QStackedWidget()
         self._stack.addWidget(self._build_joint_mode())
         self._stack.addWidget(self._build_ik_mode())
-        layout.addWidget(self._stack)
+        # Scrollable with a floor well below the stack's natural size
+        # (three joints' worth of step/mark buttons adds up) -- without
+        # this, that natural size becomes this tab's minimumSizeHint,
+        # which then out-competes self._view for any extra room the
+        # window has to give, exactly backwards from what should grow.
+        # stretch=0 (the addWidget default below) keeps it at that floor
+        # -- self._view is the one stretch=1 widget in this layout, so it
+        # alone claims space beyond every section's own minimum.
+        stack_scroll = QScrollArea()
+        stack_scroll.setWidget(self._stack)
+        stack_scroll.setWidgetResizable(True)
+        stack_scroll.setFocusPolicy(Qt.NoFocus)
+        stack_scroll.setMinimumHeight(220)
+        # Ignored, not the QScrollArea default: with a Preferred vertical
+        # policy the layout gives this its full natural sizeHint (the
+        # stack's, ~480px) whenever the tab is tall enough to afford it,
+        # leaving nothing for self._view's stretch to actually claim.
+        # Ignored tells the layout "shrink me to my minimum first" --
+        # self._view's stretch=1 then absorbs everything past that floor.
+        stack_scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Ignored)
+        layout.addWidget(stack_scroll)
 
-        layout.addStretch(1)
+        # No trailing stretch here on purpose -- self._view (stretch=1
+        # above) is the only widget in this layout that should claim
+        # extra vertical space, so the 2D side/top views actually grow
+        # when the window does instead of splitting the gain with blank
+        # space down here.
 
         self._set_controls_enabled(False)
         self._refresh_known_limits()
@@ -269,10 +295,12 @@ class SingleLegTab(QWidget):
         layout.addWidget(mark_note)
 
         step_note = QLabel(
-            "Larger step buttons stay greyed out in a direction until you Mark a "
-            "limit there -- with nothing marked yet, every joint starts 1-degree-"
-            "steps-only in both directions. This is not a bug: it's what keeps "
-            "first-time blind exploration from taking a large, untested jump."
+            "Larger step buttons work immediately inside the gait envelope -- "
+            "the range this joint is commanded across during normal walking, "
+            "already known safe. They drop to 1-degree-only once a step would "
+            "land past that envelope; that's the real unknown-territory edge "
+            "this rule exists to slow you down for. Marking a limit extends "
+            "the safe range further, the same way."
         )
         step_note.setWordWrap(True)
         step_note.setStyleSheet(_NOTE_STYLE)

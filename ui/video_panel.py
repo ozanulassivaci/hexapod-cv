@@ -14,31 +14,52 @@ import cv2
 import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from perception.detection import Detection
 
 _BOX_COLOR_BGR = (255, 0, 0)
 _OVERLAY_COLOR_BGR = (0, 255, 0)
 _PLACEHOLDER_COLOR_BGR = (0, 0, 255)
+# Floor only, not a cap -- small enough that the placeholder text and a
+# detection box are still legible, big enough to not look broken. The
+# label itself has no maximum: it grows to fill whatever space the
+# Operate tab's layout gives it (see resizeEvent below).
+_MIN_LABEL_SIZE = (320, 240)
 
 
 class VideoPanel(QWidget):
     def __init__(self, width: int, height: int, parent=None) -> None:
         super().__init__(parent)
+        # Native camera resolution (e.g. DroidCam's 640x480) -- used to
+        # build the placeholder frame at the right aspect ratio, not as a
+        # display size. Display size follows the label's actual allocated
+        # size, recomputed on every resize (_render below).
         self._width = width
         self._height = height
+        self._last_frame: np.ndarray | None = None
+        self._last_detections: list[Detection] = []
+        self._last_fps = 0.0
+        self._last_frame_age_ms: float | None = None
 
         self._label = QLabel()
-        self._label.setFixedSize(width, height)
         self._label.setAlignment(Qt.AlignCenter)
         self._label.setStyleSheet("background-color: black; color: white;")
+        self._label.setMinimumSize(*_MIN_LABEL_SIZE)
+        self._label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._label)
 
         self.update_frame(frame=None, detections=[], fps=0.0, frame_age_ms=None)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        # The label's pixmap doesn't auto-rescale on resize (QLabel only
+        # does that with setScaledContents, which ignores aspect ratio) --
+        # re-render the last frame at the new size instead.
+        self._render()
 
     def update_frame(
         self,
@@ -47,6 +68,14 @@ class VideoPanel(QWidget):
         fps: float,
         frame_age_ms: float | None,
     ) -> None:
+        self._last_frame = frame
+        self._last_detections = detections
+        self._last_fps = fps
+        self._last_frame_age_ms = frame_age_ms
+        self._render()
+
+    def _render(self) -> None:
+        frame = self._last_frame
         if frame is None:
             pixmap = self._placeholder_pixmap("waiting for camera...")
         else:
@@ -54,13 +83,14 @@ class VideoPanel(QWidget):
             # a copy -- draw on a copy so this widget never defaces what a
             # future reader of the stream would consider "the latest frame".
             frame = frame.copy()
-            _draw_detections(frame, detections)
-            _draw_overlay(frame, fps, frame_age_ms)
+            _draw_detections(frame, self._last_detections)
+            _draw_overlay(frame, self._last_fps, self._last_frame_age_ms)
             pixmap = _frame_to_pixmap(frame)
 
-        scaled = pixmap.scaled(
-            self._width, self._height, Qt.KeepAspectRatio, Qt.SmoothTransformation
-        )
+        target = self._label.size()
+        if target.width() <= 0 or target.height() <= 0:
+            return  # not laid out yet -- resizeEvent fires again once it is
+        scaled = pixmap.scaled(target, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self._label.setPixmap(scaled)
 
     def _placeholder_pixmap(self, message: str) -> QPixmap:

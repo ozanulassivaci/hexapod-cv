@@ -91,9 +91,13 @@ class CalibrationTab(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self._build_arm_section())
         layout.addWidget(self._build_servo_section())
-        layout.addWidget(self._build_table_section())
+        # stretch=1: the only section here where more room is actually
+        # useful (more of the 18-servo table visible without scrolling)
+        # -- no trailing addStretch competing for that space, or it would
+        # just leave a bigger grey border below the table instead of
+        # growing it.
+        layout.addWidget(self._build_table_section(), 1)
         layout.addWidget(self._build_export_section())
-        layout.addStretch(1)
 
         self._refresh_servo_controls_from_known()
 
