@@ -330,7 +330,8 @@ sanity check at the protocol level. The GUI's manual pulse slider always
 spans this same full generic range, even after bench testing has recorded
 a narrower `min_deg_from_neutral`/`max_deg_from_neutral` for that servo —
 it does not currently narrow itself to the recorded limit, only the wire
-enforcement (`GatedServoDriver`, this section) does. Until it does,
+enforcement (`GatedServoDriver`, `LimitMode::Mechanical` — §11 — since
+this is bench mode, not gait) does. Until it does,
 there's nothing narrowing what the slider *shows* except the generic
 bound and the operator's own attention, one small nudge at a time; the
 GUI does display the recorded limit as text once known (see
@@ -425,16 +426,99 @@ mechanical stop with no other visible symptom. That's worth a real,
 glanceable warning, not a number buried in a details panel nobody
 opens until after something breaks.
 
-**This will need revisiting once Test Leg exploration mode exists.**
+**Resolved: `FAULT_IK_CLIP` only means anything while gait is actually
+ticking, so it's cleared (not left frozen) the instant gait stops.**
 Deliberately probing right up to and past a joint's limit is the entire
-point of that mode — `joint_clip` firing there is expected, routine,
-and would just be alarm-fatigue noise if treated the same as a clip
-during real gait (the identical failure mode §9 above rejected a
+point of Test Leg exploration — `joint_clip` firing there would be
+expected, routine, and just alarm-fatigue noise if treated the same as a
+clip during real gait (the identical failure mode §9 above rejected a
 cross-check signal over: a warning that fires during legitimate use
-trains the operator to ignore it). Whichever code adds that mode needs
-to stop setting `FAULT_IK_CLIP` while it's active — scoped there
-deliberately, not solved preemptively here, since that mode doesn't
-exist yet.
+trains the operator to ignore it). The fix isn't "detect Test Leg mode
+and suppress this bit while it's active" — Test Leg exploration will be
+gated by `bench_mode`, exactly like Bench Test today, and gait already
+never ticks while `bench_mode` is armed (§8's mutual exclusion); nothing
+Test Leg mode does would ever touch `GaitState`'s clip tracking at all.
+The actual gap was narrower and already latent before Test Leg mode was
+even a consideration: `main.cpp`'s main loop only updated
+`FAULT_IK_CLIP`/`FAULT_SERVO_FAULT_BIT` inside the `if (gaitShouldRun)`
+branch, so whenever gait *wasn't* ticking (a link timeout, or bench mode
+armed for any reason, including ordinary loose-servo bench testing
+today) both bits simply froze at whatever they last were, rather than
+being cleared. A bit that's stuck reporting a clip that happened, say,
+thirty seconds ago and hasn't recurred since gait stopped is misleading
+regardless of *why* gait stopped — fixed by clearing both bits in the
+`else` branch of that same check, not by adding mode-awareness.
+`SimRobotLink._augment()` mirrors the identical fix (`gait_ticking`,
+computed the same way `_run()`'s own freeze condition is).
+
+## 11. Three limit tiers, previously conflated into one
+
+Before this section's work, a joint had exactly one limit concept:
+`clamp_joint_angles()`'s `COXA/FEMUR/TIBIA_MIN/MAX_DEG` (`robot/
+kinematics.py`) — coxa's is a real, proven-safe bound (`ANALYSIS.md`
+§5.1); femur/tibia's are placeholders set to full nominal servo travel,
+explicitly "until real mechanical limits are known." That one number was
+doing three different jobs at once: "what gait's math ever asks for,"
+"what the physical leg can survive," and "what's actually safe to let
+gait reach" — three questions with three different answers, collapsed
+into one placeholder because only one had ever been built.
+
+- **Gait envelope** (`robot/gait.py`'s `GAIT_ENVELOPE_*_MIN/MAX_DEG`) —
+  what gait's own math ever actually asks a joint to reach, across the
+  full commandable space (every phase, direction, speed, rotation, body
+  height), given the constants tuned earlier this session. Purely
+  informational — nothing enforces it, nothing can violate it by
+  construction (it's a description of gait's own output, not a
+  constraint fed back into anything). In degrees from each joint's own
+  neutral (`to_servo_deg()`'s convention — coxa/femur match this
+  module's raw kinematic angle directly; tibia does not, see that
+  constant's own derivation comment for why), so it's directly
+  comparable to the tier below.
+- **Mechanical limit** — where printed parts actually collide, measured
+  on the single test leg (`reference/ANALYSIS.md`'s bring-up plan).
+  Already had its storage built (§7): `ServoProfile.min_deg_from_neutral`/
+  `max_deg_from_neutral`, written via `record_limit`, per servo_index —
+  not per joint type, even though the *value* should be the same across
+  all six servos of a type once assembled (an operator applies the one
+  test-leg measurement to the other five by hand; nothing here shares
+  it automatically, and nothing needed to for this section's scope).
+- **Safe limit** — the mechanical limit shrunk inward by
+  `SAFE_LIMIT_MARGIN_DEG` (5°, `robot/kinematics.py` /
+  `firmware/include/Config.h`) on each end. The only tier firmware
+  actually enforces against a gait-computed pulse.
+
+**Enforcement has two modes, and which one applies is the whole point.**
+`GatedServoDriver::commandPulse` takes a `LimitMode`:
+
+- `LimitMode::Mechanical` — compares against the recorded bound exactly
+  as measured, no margin. `bench_pulse`'s enforcement and the serial
+  mirror's `bench pulse` both use this — exploration (finding the
+  mechanical limit in the first place, and later, Test Leg mode
+  deliberately probing it) must be able to reach the true edge, not stop
+  short of it by a margin that would make the margin itself unmeasurable.
+- `LimitMode::Safe` — compares against the bound shrunk inward by the
+  margin. `driveGaitOutputs` is the only caller that ever passes this,
+  and it is architecturally the only path a gait-computed pulse can
+  reach hardware through (`GatedServoDriver` is "the only way any code
+  in this firmware may command a raw pulse," per its own header
+  comment) — so the safe limit is unreachable by any gait-driven code
+  path, not just unreachable by convention. This is what makes §10's
+  "any clip during real gait is genuinely anomalous" claim actually
+  true at the hardware boundary, not just true of the theoretical
+  envelope.
+
+**The fit check.** Does the gait envelope actually fit inside the safe
+limit, with room to spare, for every one of the 18 servos?
+`robot/safe_limit_check.py`'s `check_fit()`/`check_all()` answer this
+per servo: which joint, whether it fits, and — critically, not just
+pass/fail — how many degrees of spare room on each end (negative means a
+shortfall, and by how much). Unmeasured (`None`) is scored as a failure,
+not skipped or treated as "no constraint" — an unmeasured bound isn't
+unlimited, it's unknown, and this check exists to catch exactly the case
+where nobody's verified there's room yet. Design-time only: nothing here
+runs at connect time or gates anything automatically, since there's
+nothing to check against until a Test Leg session has actually recorded
+real mechanical data (nothing is assembled yet — CLAUDE.md).
 
 ## Commands
 
