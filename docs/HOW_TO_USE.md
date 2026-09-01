@@ -124,25 +124,49 @@ is ambiguous on its own — this section says exactly what to command,
 what pose to hold the leg segment in while pressing the horn on, and how
 to eyeball-check you landed on the right spline tooth.
 
+**The principle: park the servo at its own center, not at the pose.**
+Every analog servo's own neutral — the middle of its travel — sits at
+1500us, regardless of what any joint convention calls "zero." The gait
+envelope (the range each joint actually needs across every phase,
+direction, speed, rotation, and body height gait ever commands) has its
+own midpoint too, and that midpoint is generally *not* the joint's
+kinematic zero — for the femur it's about 34 degrees above horizontal,
+not flat. Centering the envelope on the servo's travel means commanding
+the servo to **1500us for every joint** while physically holding the leg
+segment at *that joint's own envelope-midpoint pose*, then pressing the
+horn on. That's it — one pulse value for all three joints; only the pose
+held while mounting differs per joint.
+
+(An earlier version of this section had the two swapped: command the
+*envelope-midpoint pulse*, hold the segment at the envelope-midpoint
+pose. That puts kinematic zero at the servo's center instead of the
+envelope's center — for femur and tibia, whose envelopes don't straddle
+kinematic zero, it left the servo leaning hard against one end of its
+own travel with the other side almost unused. Coxa was never affected,
+because its envelope happens to straddle kinematic zero already. See
+"Headroom" below for the numbers this fixes.)
+
 **The three numbers, at a glance:**
 
-| Joint | Servo angle | Pulse | By-eye check |
+| Joint | Command while mounting | Pose to hold | By-eye check |
 |---|---|---|---|
-| Coxa  | 90.0°  | 1500us | Swings the same amount to both sides of the reference line |
-| Tibia | 77.0°  | 1355us | ~103° fold from the femur's own straight line (knee-bend direction) |
-| Femur | 124.2° | 1880us | ~34° up from horizontal, checked with a level |
+| Coxa  | 1500us | Segment pointing away from the servo body, any convenient direction | Swings the same amount to both sides of that reference line |
+| Tibia | 1500us | ~103° fold from the femur's own straight line (knee-bend direction) | Same fold angle, checked against the femur's straight edge |
+| Femur | 1500us | ~34° up from horizontal | Checked with a level |
 
 Full procedure, pose to hold, and why below — read it before mounting
 anything, this table is a reference to come back to, not a substitute
 for the steps.
 
 The numbers below assume: the leg is wired to a Bench Test tab channel
-one servo at a time; `TIBIA_NEUTRAL_PULSE_US` is still the unverified
-`Config.h` placeholder (500us, same as `BENCH_PULSE_MIN_US`) — if that
-value changes before you do this, redo the tibia arithmetic first; and no
-`offset_us` calibration exists yet, since bench mode drives raw pulses.
-Mount now, calibrate precisely once the leg is on and Calibrate is
-usable.
+one servo at a time, and no `offset_us` calibration exists yet, since
+bench mode drives raw pulses. Mount now, calibrate precisely once the
+leg is on and Calibrate is usable. Because every joint is mounted at the
+servo's own universal 1500us center rather than a joint-specific
+computed pulse, none of the three numbers above depend on
+`TIBIA_NEUTRAL_PULSE_US` or any other firmware constant — see "Where
+1355us and TIBIA_NEUTRAL_PULSE_US went" below for what that constant is
+still for.
 
 **Order: coxa, then tibia, then femur.** Coxa doesn't depend on anything
 else. Tibia's check is relative to the femur segment's own straight line,
@@ -152,13 +176,16 @@ tibia are already fixed in place, so a simple gravity-referenced level
 check becomes valid.
 
 For each joint: wire it to a Bench Test channel, arm Bench Test, drag the
-manual pulse slider to the value below (or nudge with +/- until the
-readout matches), physically hold the leg segment in the stated pose,
-then press the horn onto the spline. Keep the servo powered and holding
-that exact pulse the whole time you're pressing — parking at neutral or
-releasing would let the segment drift while you're trying to align it.
+manual pulse slider to 1500us (or nudge with +/- until the readout
+matches), physically hold the leg segment in the stated pose, then press
+the horn onto the spline. Keep the servo powered and holding that exact
+pulse the whole time you're pressing — parking at neutral or releasing
+would let the segment drift while you're trying to align it. ("Keep it
+at neutral" and "command 1500us" are the same instruction now, for every
+joint — there's no longer a separate "return to neutral" step after
+holding a different mounting pulse.)
 
-### 1. Coxa — 90.0 servo degrees, 1500us
+### 1. Coxa — command 1500us, hold pointing away from the servo body
 
 - Command 1500us on the coxa channel.
 - There's no body and no leg yet, so there's no compass direction to
@@ -166,16 +193,16 @@ releasing would let the segment drift while you're trying to align it.
   pointing away from the servo body in any convenient direction — that
   becomes your reference line for the check below.
 - **Check:** with the horn on, nudge the slider toward each side (about
-  1420us and 1580us — the gait envelope's +-19.6 degree limits) and
-  watch the leg swing. It should swing visibly the same amount to both
-  sides of your reference line. If one side is clearly shorter than the
-  other, the horn is a spline tooth (14.4 degrees) off — pull it and
-  rotate one tooth toward the short side.
+  1282us and 1718us — the gait envelope's +-19.6 degree limits, see the
+  headroom table below) and watch the leg swing. It should swing visibly
+  the same amount to both sides of your reference line. If one side is
+  clearly shorter than the other, the horn is a spline tooth (14.4
+  degrees) off — pull it and rotate one tooth toward the short side.
 - Return the slider to 1500us before moving on.
 
-### 2. Tibia — 77.0 servo degrees, 1355us
+### 2. Tibia — command 1500us, hold ~103° folded from the femur's line
 
-- Command 1355us on the tibia channel (the servo mounted at the femur
+- Command 1500us on the tibia channel (the servo mounted at the femur
   segment's far end).
 - Hold the femur segment straight — resting it flat against the table
   edge or any straightedge is enough. It doesn't need to be at its own
@@ -188,11 +215,11 @@ releasing would let the segment drift while you're trying to align it.
   degrees). If it looks off by roughly one spline tooth's worth (14.4
   degrees more or less folded), pull the horn and shift one tooth.
 
-### 3. Femur — 124.2 servo degrees, 1880us
+### 3. Femur — command 1500us, hold ~34° above horizontal
 
 - Coxa and tibia are already fixed at this point — no other joint's pose
   matters for this check.
-- Command 1880us on the femur channel.
+- Command 1500us on the femur channel.
 - **Check:** hold a level (or a phone inclinometer app) against the flat
   top or bottom face of the femur segment. It should read about 34
   degrees above horizontal, tilted up from the coxa — clearly angled
@@ -205,23 +232,31 @@ releasing would let the segment drift while you're trying to align it.
 25T splines only take a tooth every 14.4 degrees, so no matter how
 carefully you align by eye, worst case you're 7.2 degrees off — the
 checks above exist to make sure you picked the *nearest* tooth, not one
-14.4 degrees away, not to make the mount exact. Whether 7.2 degrees is
-safe to walk away from depends on how much room the gait envelope has
-against the servo's own end of travel (not yet against real mechanical
-limits — nothing is measured until the Test Leg exploration work
-happens):
+14.4 degrees away, not to make the mount exact. The table below gives
+headroom two ways: against the servo's nominal 500-2500us range, and
+against the Bench Test tab's conservative 600-2400us range (established
+because clone MG996Rs commonly don't reliably reach the nominal
+extremes) — the conservative column is the one that matters for a real
+decision, since it's the range this specific hardware can actually be
+trusted to hit. Both are against the *servo's* end of travel, not yet
+against real mechanical limits — nothing is measured until the Test Leg
+exploration work happens.
 
-- **Coxa:** envelope needs 70.4-109.6 degrees of the servo's 0-180 range
-  — 70.4 degrees of headroom on both ends. No concern.
-- **Femur:** envelope needs 87.9-160.5 degrees — only 19.5 degrees of
-  headroom before the servo's own nominal 180-degree end. Survives a
-  7.2-degree mounting error with 12.3 degrees to spare, but this is the
-  joint to watch once real bench data comes in for this specific unit —
-  clone MG996Rs are already known not to reliably reach nominal 180 (see
-  the Bench Test tab's conservative 600-2400us range), which eats into
-  this margin from the servo side, independent of the horn mount.
-- **Tibia:** envelope needs 39.6-114.4 degrees — 39.6 and 65.6 degrees of
-  headroom on the low and high ends respectively. No concern.
+| Joint | Envelope (mounted, symmetric around 1500us) | Headroom, nominal 500-2500us | Headroom, conservative 600-2400us |
+|---|---|---|---|
+| Coxa  | 1282-1718us | 782us (70.4°) both sides | 682us (61.4°) both sides |
+| Femur | 1097-1903us | 597us (53.7°) both sides | 497us (44.7°) both sides |
+| Tibia | 1085-1916us | 585us (52.6°) both sides | 485us (43.6°) both sides |
+
+All three are now symmetric and comfortable — worst case (femur or
+tibia, conservative range) is 44.7 degrees / ~497us of headroom, more
+than six worst-case spline-tooth errors (7.2 degrees each) away from the
+servo's own practical end of travel. Under the old (pre-fix) mounting
+strategy, femur's headroom on its tight side was 19.5 degrees against
+nominal and would have been about 10.5 degrees against the conservative
+range — survivable but tight. Centering on the servo's own 1500us
+instead of on kinematic zero is what closes that gap; no alternate
+mounting angle or narrower gait envelope is needed.
 
 Coxa's mounting angle is identical across all six legs (the raw midpoint
 is exactly 0 degrees for every leg, corner or middle — confirmed by a
@@ -229,6 +264,35 @@ leg-invariance check across the full envelope sweep), so the earlier
 0.35-degree corner/middle-leg discrepancy, whatever its source, doesn't
 show up in this number and doesn't need resolving before mounting this
 one test leg.
+
+### Where 1355us and TIBIA_NEUTRAL_PULSE_US went
+
+An earlier version of this section had you command 1355us for tibia —
+that number came from the old (now-corrected) mounting strategy above,
+and doesn't apply to the current one. It's not a hardware fact and
+nothing depends on it; ignore it if you've seen it before.
+
+`TIBIA_NEUTRAL_PULSE_US` (`firmware/include/Config.h`,
+`transport/protocol.py`) is a different thing: it's the pulse that will
+mean "tibia dead straight" (kinematic zero) *after* this mounting is
+done, for use once gait or IK actually commands the tibia by angle
+instead of by raw bench pulse. It used to default to the placeholder
+`BENCH_PULSE_MIN_US` (500us) — a leftover assumption from the reference
+firmware's own convention, where the tibia horn's zero was tied to the
+servo's own physical low end (see `reference/ANALYSIS.md` Section 2). That
+assumption never applied to this project once bench mode's own
+per-servo calibration point (`neutral_pulse_us_for_servo`) existed to
+decouple the two — so it's now set to the value this mounting strategy
+actually produces: with the horn mounted per this section (1500us at the
+tibia's envelope-midpoint fold of ~77 degrees), commanding "dead
+straight" works out to about **645us**. This is a target, not a
+guarantee — it still carries the same up-to-7.2-degree (~80us) spline
+uncertainty as everything else here, so it must be confirmed once the
+leg is mounted and Calibrate is usable: command pulses near 645us and
+find the one where the tibia segment reads dead straight against the
+femur's own line, the same by-eye check as above. If the measured value
+differs meaningfully from 645us, update the constant in both files
+before trusting IK-mode angles on this joint.
 
 ## Clamping the test leg for exploration work
 
