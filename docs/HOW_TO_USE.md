@@ -124,6 +124,18 @@ is ambiguous on its own — this section says exactly what to command,
 what pose to hold the leg segment in while pressing the horn on, and how
 to eyeball-check you landed on the right spline tooth.
 
+**The three numbers, at a glance:**
+
+| Joint | Servo angle | Pulse | By-eye check |
+|---|---|---|---|
+| Coxa  | 90.0°  | 1500us | Swings the same amount to both sides of the reference line |
+| Tibia | 77.0°  | 1355us | ~103° fold from the femur's own straight line (knee-bend direction) |
+| Femur | 124.2° | 1880us | ~34° up from horizontal, checked with a level |
+
+Full procedure, pose to hold, and why below — read it before mounting
+anything, this table is a reference to come back to, not a substitute
+for the steps.
+
 The numbers below assume: the leg is wired to a Bench Test tab channel
 one servo at a time; `TIBIA_NEUTRAL_PULSE_US` is still the unverified
 `Config.h` placeholder (500us, same as `BENCH_PULSE_MIN_US`) — if that
