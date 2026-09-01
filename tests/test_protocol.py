@@ -17,6 +17,7 @@ from transport.protocol import (
     HEALTH_NOTE_MAX_LEN,
     LimitBound,
     Mood,
+    NEUTRAL_PULSE_US,
     PanTiltCommand,
     PingCommand,
     ProtocolError,
@@ -25,14 +26,19 @@ from transport.protocol import (
     ServoProfile,
     StopCommand,
     Telemetry,
+    TIBIA_NEUTRAL_PULSE_US,
     TurnCommand,
     WalkCommand,
     WriteOffsetsCommand,
+    angle_to_pulse_us,
     decode_command,
     decode_telemetry,
     encode_command,
     encode_telemetry,
+    neutral_pulse_us_for_servo,
+    neutral_servo_deg_for_servo,
     next_sequence,
+    pulse_us_to_deg_from_neutral,
     sequence_is_newer,
 )
 
@@ -292,6 +298,63 @@ def test_servo_profile_limits_default_to_none_not_a_fake_value():
     assert profile.min_deg_from_neutral is None
     assert profile.max_deg_from_neutral is None
     assert profile.note == ""
+
+
+# --- pulse<->degree-from-neutral conversion --------------------------------
+
+
+def test_neutral_pulse_and_servo_deg_match_joint_type_by_index():
+    # servo_index % 3: 0=coxa, 1=femur, 2=tibia (ui/servo_names.py's
+    # documented placeholder convention).
+    for coxa_index, femur_index, tibia_index in ((0, 1, 2), (3, 4, 5), (15, 16, 17)):
+        assert neutral_pulse_us_for_servo(coxa_index) == NEUTRAL_PULSE_US
+        assert neutral_pulse_us_for_servo(femur_index) == NEUTRAL_PULSE_US
+        assert neutral_pulse_us_for_servo(tibia_index) == TIBIA_NEUTRAL_PULSE_US
+        assert neutral_servo_deg_for_servo(coxa_index) == 90.0
+        assert neutral_servo_deg_for_servo(femur_index) == 90.0
+        assert neutral_servo_deg_for_servo(tibia_index) == 0.0
+
+
+def test_pulse_at_neutral_gives_zero_degrees():
+    assert pulse_us_to_deg_from_neutral(NEUTRAL_PULSE_US, 0) == pytest.approx(0.0)  # coxa
+    assert pulse_us_to_deg_from_neutral(TIBIA_NEUTRAL_PULSE_US, 2) == pytest.approx(0.0)  # tibia
+
+
+def test_pulse_to_deg_matches_bench_envelope_endpoints():
+    # Coxa: [500, 2500]us around neutral 1500 spans exactly [-90, +90].
+    assert pulse_us_to_deg_from_neutral(BENCH_PULSE_MIN_US, 0) == pytest.approx(-90.0)
+    assert pulse_us_to_deg_from_neutral(BENCH_PULSE_MAX_US, 0) == pytest.approx(90.0)
+    # Tibia: [500, 2500]us around neutral 500 (zero-based) spans [0, +180].
+    assert pulse_us_to_deg_from_neutral(BENCH_PULSE_MIN_US, 2) == pytest.approx(0.0)
+    assert pulse_us_to_deg_from_neutral(BENCH_PULSE_MAX_US, 2) == pytest.approx(180.0)
+
+
+def test_angle_to_pulse_is_the_inverse_of_pulse_to_deg_at_zero_offset():
+    # sign=1, offset_us=0 (bench mode's own convention -- no calibration
+    # applied) must round-trip exactly for both joint conventions. Offset
+    # ranges kept inside each joint's own valid degFromNeutral span
+    # ([-90, 90] for coxa, [0, 180] for tibia) so nothing clips at the
+    # BENCH_PULSE_MIN/MAX_US envelope -- that's a separate, deliberate
+    # behavior covered by its own test below, not what this one checks.
+    for servo_index, offsets in ((0, range(-80, 81, 10)), (2, range(10, 171, 10))):
+        neutral_deg = neutral_servo_deg_for_servo(servo_index)
+        neutral_pulse = neutral_pulse_us_for_servo(servo_index)
+        for deg in offsets:
+            pulse = angle_to_pulse_us(neutral_deg + deg, neutral_deg, neutral_pulse, 1, 0)
+            recovered = pulse_us_to_deg_from_neutral(pulse, servo_index)
+            assert recovered == pytest.approx(deg, abs=0.1)
+
+
+def test_angle_to_pulse_clamps_to_the_bench_envelope():
+    assert angle_to_pulse_us(9999.0, 90.0, NEUTRAL_PULSE_US, 1, 0) == BENCH_PULSE_MAX_US
+    assert angle_to_pulse_us(-9999.0, 90.0, NEUTRAL_PULSE_US, 1, 0) == BENCH_PULSE_MIN_US
+    assert angle_to_pulse_us(90.0, 90.0, NEUTRAL_PULSE_US, 1, 30000) == BENCH_PULSE_MAX_US
+
+
+def test_angle_to_pulse_negative_sign_flips_direction():
+    plus = angle_to_pulse_us(120.0, 90.0, NEUTRAL_PULSE_US, 1, 0)
+    minus = angle_to_pulse_us(120.0, 90.0, NEUTRAL_PULSE_US, -1, 0)
+    assert (plus - NEUTRAL_PULSE_US) == -(minus - NEUTRAL_PULSE_US)
 
 
 def test_walk_rejects_nan_and_infinity():

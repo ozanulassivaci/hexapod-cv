@@ -69,6 +69,33 @@ def pulse_us_to_deg_from_neutral(pulse_us: int, servo_index: int) -> float:
     see ServoProfile.min_deg_from_neutral."""
     return (pulse_us - neutral_pulse_us_for_servo(servo_index)) / _US_PER_DEG
 
+
+def neutral_servo_deg_for_servo(servo_index: int) -> float:
+    """Coxa/femur bipolar-90, tibia zero-based -- same servo_index % 3
+    convention as neutral_pulse_us_for_servo, mirrors firmware's
+    ServoMap.h/neutralServoDegFor(JointType) and
+    robot/kinematics.py's to_servo_deg()."""
+    return 0.0 if servo_index % 3 == 2 else 90.0
+
+
+def angle_to_pulse_us(servo_deg: float, neutral_servo_deg: float, neutral_pulse_us: int, sign: int, offset_us: int) -> int:
+    """Mirrors firmware's AngleToPulse::angleToPulseUs exactly (same
+    formula, same clamp) -- the PC-side half of this project's "two
+    independent implementations, kept in lockstep" pattern
+    (ANALYSIS.md Section 7), needed so the Test Leg tab's IK mode can
+    turn a computed joint angle into an actual bench_pulse command
+    without a compiled extension. Clamped to
+    [BENCH_PULSE_MIN_US, BENCH_PULSE_MAX_US] defensively before ever
+    reaching a wire command -- BenchPulseCommand's own construction-time
+    validation would reject an out-of-range value anyway, but this
+    keeps the two clamps consistent with firmware's own belt-and-braces
+    approach rather than relying on that validation as the only line of
+    defense."""
+    pulse = neutral_pulse_us + sign * (servo_deg - neutral_servo_deg) * _US_PER_DEG + offset_us
+    pulse = max(BENCH_PULSE_MIN_US, min(BENCH_PULSE_MAX_US, pulse))
+    return round(pulse)
+
+
 FAULT_NONE = 0
 FAULT_LINK_TIMEOUT = 1 << 0
 FAULT_ESTOP = 1 << 1
