@@ -406,6 +406,22 @@ class BenchTab(QWidget):
         selector_row.addWidget(self._servo_combo)
         layout.addLayout(selector_row)
 
+        physical_id_row = QHBoxLayout()
+        self._physical_id_edit = QLineEdit()
+        self._physical_id_edit.setPlaceholderText("e.g. a number written on this servo in marker")
+        physical_id_row.addWidget(QLabel("physical unit ID (optional)"))
+        physical_id_row.addWidget(self._physical_id_edit)
+        layout.addLayout(physical_id_row)
+        physical_id_note = QLabel(
+            "Repeatability/hold check results below are logged against this, not "
+            "board/channel (which changes every time you rewire) -- write a number "
+            "on the servo itself before testing if you want to track it across "
+            "sessions, especially before its final leg position is decided."
+        )
+        physical_id_note.setWordWrap(True)
+        physical_id_note.setStyleSheet(_NOTE_STYLE)
+        layout.addWidget(physical_id_note)
+
         self._known_limits_label = QLabel("known limits: not bench-tested")
         self._known_limits_label.setFocusPolicy(Qt.NoFocus)
         layout.addWidget(self._known_limits_label)
@@ -715,11 +731,10 @@ class BenchTab(QWidget):
         self._set_manual_controls_enabled(True)
 
     def _on_repeatability_answer(self, same_point: bool) -> None:
-        servo_index = self._servo_combo.currentIndex()
         verdict = "same point (OK)" if same_point else "DIFFERENT point (not repeatable)"
-        self.log_message.emit(f"repeatability check for servo {servo_index} ({SERVO_NAMES[servo_index]}): {verdict}")
+        self.log_message.emit(f"repeatability check for {self._identity_text()}: {verdict}")
         if not same_point:
-            self._append_to_note(f"repeatability check failed: did not return to the same point")
+            self._append_to_note("repeatability check failed: did not return to the same point")
         self._repeatability_status_label.setText("")
         self._set_repeatability_answer_buttons_visible(False)
 
@@ -761,9 +776,8 @@ class BenchTab(QWidget):
         self._set_manual_controls_enabled(True)
 
     def _on_hold_check_answer(self, silent: bool) -> None:
-        servo_index = self._servo_combo.currentIndex()
         verdict = "silent (OK)" if silent else "HUNTING/BUZZING (not holding cleanly)"
-        self.log_message.emit(f"hold check for servo {servo_index} ({SERVO_NAMES[servo_index]}): {verdict}")
+        self.log_message.emit(f"hold check for {self._identity_text()}: {verdict}")
         if not silent:
             self._append_to_note("hold check failed: hunting/buzzing at neutral")
         self._hold_check_status_label.setText("")
@@ -780,6 +794,18 @@ class BenchTab(QWidget):
         existing = self._note_edit.text()
         combined = f"{existing}; {text}" if existing else text
         self._note_edit.setText(combined)
+
+    def _identity_text(self) -> str:
+        """What a repeatability/hold check result is logged against --
+        the marker-written physical unit ID if one was entered, since
+        that identifies the physical part across sessions and possible
+        rewiring; falls back to the future servo_index position (never
+        board/channel, which is only "what's plugged in right now")."""
+        physical_id = self._physical_id_edit.text().strip()
+        if physical_id:
+            return f"unit {physical_id!r}"
+        servo_index = self._servo_combo.currentIndex()
+        return f"servo {servo_index} ({SERVO_NAMES[servo_index]})"
 
     # --- dwell / stall protection ---------------------------------------
 
