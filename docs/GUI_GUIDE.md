@@ -322,12 +322,21 @@ bare-servo bring-up Bench Test covers.
   (last, once the other two are already fixed) — the identical order and
   reasoning as the horn-mounting procedure in `docs/HOW_TO_USE.md`.
 - **Per-joint angle display + step buttons (±1° / ±2° / ±5° / ±10°).**
-  Each joint moves independently. Larger step buttons are greyed out in a
-  direction until you've marked a limit there — with nothing marked yet
-  at all, every joint starts 1-degree-only in both directions. This is
-  not a bug: it's what stops a first blind exploration pass from taking a
-  large, untested jump. As you mark limits, the buttons within the
-  now-known-safe side open back up.
+  Each joint moves independently. A larger step button is enabled in a
+  direction as long as landing there stays inside *either* a limit
+  you've marked, *or* the gait envelope — the range this joint will
+  actually be commanded across during normal walking, computed already
+  from the kinematics and not unknown territory. With nothing marked
+  yet, that means full-size steps work immediately inside the envelope
+  (where gait was always going to send this joint anyway), and only drop
+  to 1-degree-only once a step would land *past* the envelope — that's
+  the genuine unknown-territory boundary this rule exists to slow you
+  down for. Buttons that would overshoot a boundary switch off one size
+  at a time as you approach it (10° first, then 5°, then 2°), so you
+  naturally end up creeping the last few degrees on 1° instead of
+  slamming into a hard cutoff. As you mark real mechanical limits, the
+  buttons within the now-known-safe side open back up the same way,
+  extending as far as the mark allows.
 - **Mark current as MIN / MAX (per joint).** Same underlying write as
   Bench Test's Mark buttons (`record_limit`), scoped to whichever joint's
   row you click it on. The value to record is 3-5 degrees back from where
@@ -423,19 +432,22 @@ controls. Everything driving it lives on the Operate tab.
    wiring, and pick the **leg position** this test leg's findings should
    be recorded under.
 3. Click **Arm bench mode**. Make sure **Joint mode** is selected.
-4. Pick a joint — coxa first, per the suggested order shown. Click its
-   **+1°** button repeatedly, pausing to watch the leg each time. Larger
-   step buttons stay greyed out until you mark a limit; that's expected
-   with nothing marked yet.
+4. Pick a joint — coxa first, per the suggested order shown. Larger step
+   buttons already work in both directions within the gait envelope, so
+   use them to get through the already-known-safe range quickly. Once a
+   button stops being available, you've reached the envelope edge —
+   switch to **+1°** (or **-1°**) and continue creeping, pausing to watch
+   the leg each time.
 5. The moment you see or hear binding (a servo working against
    resistance, not just reaching the end of a comfortable range), stop.
    Step back 3-5 degrees the way you came — don't record the binding
    point itself.
 6. Click **Mark current as MIN** (or **MAX**, depending on which
    direction you were exploring). The known-limits line updates.
-7. Once one side is marked, larger steps open back up on that side (up to
-   the mark) — the other direction is still 1-degree-only until you
-   repeat the process there.
+7. Once one side is marked, larger steps open back up on that side too —
+   as far as the mark allows, or the envelope, whichever reaches
+   further — the other direction is still envelope-then-1-degree until
+   you repeat the process there.
 8. Repeat for tibia, then femur, in that order.
 9. If something looks wrong at any point, click **RELEASE LEG** — it's
    always visible, works instantly, and doesn't wait for you to finish

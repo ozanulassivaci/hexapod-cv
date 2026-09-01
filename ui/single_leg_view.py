@@ -35,7 +35,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
-from control.single_leg import safety_zone_color
+from control.single_leg import deg_from_neutral, raw_bounds_from_neutral, safety_zone_color
 from robot.gait import (
     GAIT_ENVELOPE_COXA_MAX_DEG,
     GAIT_ENVELOPE_COXA_MIN_DEG,
@@ -71,6 +71,17 @@ _ZONE_COLOR = {
 
 _ARC_SAMPLES = 32
 _REACH_MM = FEMUR_LENGTH_MM + TIBIA_LENGTH_MM
+
+# GAIT_ENVELOPE_TIBIA_MIN/MAX_DEG are in deg-from-neutral frame (robot/
+# gait.py's own comment on those constants); every angle this module
+# draws with is raw (_femur_tibia_points() adds tibia_deg straight onto
+# femur_deg, matching forward_kinematics()). Converted once, at import
+# time, via control/single_leg.py's raw_bounds_from_neutral() -- the
+# same conversion is needed live, per repaint, for the current-angle
+# and marked-limit comparisons below, since those change at runtime.
+_TIBIA_ENVELOPE_RAW_MIN_DEG, _TIBIA_ENVELOPE_RAW_MAX_DEG = raw_bounds_from_neutral(
+    "tibia", GAIT_ENVELOPE_TIBIA_MIN_DEG, GAIT_ENVELOPE_TIBIA_MAX_DEG
+)
 
 
 def _femur_tibia_points(femur_deg: float, tibia_deg: float) -> tuple[tuple[float, float], tuple[float, float]]:
@@ -236,8 +247,8 @@ class _SideViewCanvas(_BaseCanvas):
         tibia_env_arc = self._arc_path(
             elbow,
             TIBIA_LENGTH_MM,
-            femur_deg + GAIT_ENVELOPE_TIBIA_MIN_DEG,
-            femur_deg + GAIT_ENVELOPE_TIBIA_MAX_DEG,
+            femur_deg + _TIBIA_ENVELOPE_RAW_MIN_DEG,
+            femur_deg + _TIBIA_ENVELOPE_RAW_MAX_DEG,
             origin,
             scale,
         )
@@ -260,7 +271,10 @@ class _SideViewCanvas(_BaseCanvas):
             femur_deg, self._known_limits["femur"][0], self._known_limits["femur"][1], SAFE_LIMIT_MARGIN_DEG
         )
         tibia_zone = safety_zone_color(
-            tibia_deg, self._known_limits["tibia"][0], self._known_limits["tibia"][1], SAFE_LIMIT_MARGIN_DEG
+            deg_from_neutral("tibia", tibia_deg),
+            self._known_limits["tibia"][0],
+            self._known_limits["tibia"][1],
+            SAFE_LIMIT_MARGIN_DEG,
         )
         painter.setPen(QPen(_ZONE_COLOR[femur_zone], 4))
         painter.drawLine(coxa_screen, elbow_screen)
@@ -276,7 +290,11 @@ class _SideViewCanvas(_BaseCanvas):
         painter.drawText(QRectF(6, 4, self.width() - 12, 20), Qt.AlignLeft, "side view (femur/tibia plane)")
 
     def _draw_forbidden_zones(self, painter, joint, center, radius_mm, angle_offset_deg, pivot_screen, origin, scale):
-        marked_min, marked_max = self._known_limits[joint]
+        # self._known_limits is stored in deg-from-neutral frame
+        # (ServoProfile's own frame); raw_bounds_from_neutral() converts
+        # to the raw frame every angle in this view is drawn in --
+        # identity for femur, negate-and-swap for tibia.
+        marked_min, marked_max = raw_bounds_from_neutral(joint, *self._known_limits[joint])
         joint_min = FEMUR_MIN_DEG if joint == "femur" else TIBIA_MIN_DEG
         joint_max = FEMUR_MAX_DEG if joint == "femur" else TIBIA_MAX_DEG
         if marked_min is not None and marked_min > joint_min:

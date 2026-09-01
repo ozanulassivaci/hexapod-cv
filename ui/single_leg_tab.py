@@ -36,7 +36,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from control.single_leg import EXPLORATION_ORDER, TEST_LEG, is_step_allowed
+from control.single_leg import EXPLORATION_ORDER, TEST_LEG, deg_from_neutral, is_step_allowed
+from robot.gait import (
+    GAIT_ENVELOPE_COXA_MAX_DEG,
+    GAIT_ENVELOPE_COXA_MIN_DEG,
+    GAIT_ENVELOPE_FEMUR_MAX_DEG,
+    GAIT_ENVELOPE_FEMUR_MIN_DEG,
+    GAIT_ENVELOPE_TIBIA_MAX_DEG,
+    GAIT_ENVELOPE_TIBIA_MIN_DEG,
+)
 from robot.kinematics import (
     LEGS,
     JointAngles,
@@ -74,6 +82,16 @@ _COMMANDED_NOT_MEASURED_STYLE = (
 )
 _JOINT_OFFSET = {"coxa": 0, "femur": 1, "tibia": 2}
 _STEP_SIZES_DEG = (1.0, 2.0, 5.0, 10.0)  # smallest first -- see control/single_leg.py
+
+# Already in deg-from-neutral frame (robot/gait.py's own constants --
+# see control/single_leg.py's deg_from_neutral() for why that's the
+# frame is_step_allowed() needs, and why tibia isn't just the raw
+# envelope numbers).
+_GAIT_ENVELOPE_DEG_FROM_NEUTRAL = {
+    "coxa": (GAIT_ENVELOPE_COXA_MIN_DEG, GAIT_ENVELOPE_COXA_MAX_DEG),
+    "femur": (GAIT_ENVELOPE_FEMUR_MIN_DEG, GAIT_ENVELOPE_FEMUR_MAX_DEG),
+    "tibia": (GAIT_ENVELOPE_TIBIA_MIN_DEG, GAIT_ENVELOPE_TIBIA_MAX_DEG),
+}
 
 
 def _servo_deg_for_joint(joint: str, raw_deg: float) -> float:
@@ -460,16 +478,19 @@ class SingleLegTab(QWidget):
 
     def _on_step_clicked(self, joint: str, step_deg: float) -> None:
         direction = 1 if step_deg > 0 else -1
+        envelope_min, envelope_max = _GAIT_ENVELOPE_DEG_FROM_NEUTRAL[joint]
         allowed = is_step_allowed(
-            self._current_deg[joint],
+            deg_from_neutral(joint, self._current_deg[joint]),
             abs(step_deg),
-            direction,
+            int(deg_from_neutral(joint, direction)),
             self._known_limits[joint][0],
             self._known_limits[joint][1],
             smallest_step_deg=_STEP_SIZES_DEG[0],
+            envelope_min_deg=envelope_min,
+            envelope_max_deg=envelope_max,
         )
         if not allowed:
-            self.log_message.emit(f"{joint}: step refused, past the marked-safe range for this size")
+            self.log_message.emit(f"{joint}: step refused, past both the marked-safe and gait-envelope range")
             return
         new_deg = self._current_deg[joint] + step_deg
         self._send_joint_angle(joint, new_deg)
@@ -518,11 +539,19 @@ class SingleLegTab(QWidget):
     def _update_step_button_states(self) -> None:
         for joint, buttons in self._step_buttons.items():
             marked_min, marked_max = self._known_limits[joint]
-            current = self._current_deg[joint]
+            envelope_min, envelope_max = _GAIT_ENVELOPE_DEG_FROM_NEUTRAL[joint]
+            current = deg_from_neutral(joint, self._current_deg[joint])
             for signed_step, button in buttons.items():
                 direction = 1 if signed_step > 0 else -1
                 allowed = is_step_allowed(
-                    current, abs(signed_step), direction, marked_min, marked_max, smallest_step_deg=_STEP_SIZES_DEG[0]
+                    current,
+                    abs(signed_step),
+                    int(deg_from_neutral(joint, direction)),
+                    marked_min,
+                    marked_max,
+                    smallest_step_deg=_STEP_SIZES_DEG[0],
+                    envelope_min_deg=envelope_min,
+                    envelope_max_deg=envelope_max,
                 )
                 button.setEnabled(allowed and self._enabled_base)
 
