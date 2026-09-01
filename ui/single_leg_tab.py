@@ -63,6 +63,7 @@ from transport.protocol import (
     neutral_servo_deg_for_servo,
 )
 from transport.generated_constants import BENCH_ARM_TIMEOUT_S
+from ui.single_leg_view import SingleLegView
 
 _SEND_TIMEOUT_S = 0.5
 _ARMED_STYLE = "color: #ffb300; font-weight: bold;"
@@ -111,6 +112,10 @@ class SingleLegTab(QWidget):
         layout.addWidget(self._build_leg_section())
         layout.addWidget(self._build_channel_section())
         layout.addWidget(self._build_release_section())
+
+        self._view = SingleLegView(self._current_deg, self._known_limits)
+        layout.addWidget(self._view, 1)
+
         layout.addWidget(self._build_mode_toggle())
 
         self._stack = QStackedWidget()
@@ -394,6 +399,7 @@ class SingleLegTab(QWidget):
         self._disarm_button.setEnabled(armed)
         self._set_controls_enabled(armed)
         self._update_step_button_states()
+        self._view.tick()
 
     def emergency_stop(self) -> None:
         """Called by MainWindow's global e-stop no matter which tab is
@@ -436,6 +442,7 @@ class SingleLegTab(QWidget):
             profile = telemetry.profiles[self._servo_index(joint)]
             self._known_limits[joint] = (profile.min_deg_from_neutral, profile.max_deg_from_neutral)
             self._limits_label[joint].setText(f"known limits: {_limits_text(profile)}")
+        self._view.tick()
 
     # --- release -----------------------------------------------------
 
@@ -480,6 +487,7 @@ class SingleLegTab(QWidget):
         )
         self._current_deg[joint] = raw_deg
         self._angle_label[joint].setText(f"{raw_deg:+.1f} deg from neutral")
+        self._view.tick()  # live stick figure follows every commanded step immediately, not on the next tick()
 
     def _on_mark_clicked(self, joint: str, bound: LimitBound) -> None:
         servo_index = self._servo_index(joint)

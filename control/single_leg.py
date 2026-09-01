@@ -40,9 +40,11 @@ def is_step_allowed(
     smallest_step_deg: float,
 ) -> bool:
     """Whether one specific step button should be enabled right now --
-    what ui/test_leg_tab.py actually calls, once per button per tick.
-    Same rule as max_allowed_step_deg, phrased as a per-button check
-    instead of "which is the largest allowed"."""
+    what ui/single_leg_tab.py actually calls, once per button per tick.
+    The smallest step is always allowed (creeping forward one unverified
+    degree at a time is exactly how a limit gets found and marked in the
+    first place); a larger step is only offered if landing there would
+    stay within the marked-safe range on that side."""
     if step_deg <= smallest_step_deg:
         return True
     target = current_deg + direction * step_deg
@@ -50,3 +52,44 @@ def is_step_allowed(
     if marked_bound is None:
         return False
     return target <= marked_bound if direction > 0 else target >= marked_bound
+
+
+def safety_zone_color(
+    current_deg: float,
+    marked_min_deg: float | None,
+    marked_max_deg: float | None,
+    margin_deg: float,
+) -> str:
+    """"green"/"amber"/"red"/"unknown" -- how close current_deg sits to
+    this joint's *safe* limit (the marked mechanical bound shrunk inward
+    by margin_deg on each end, the same shrinking
+    GatedServoDriver.h's LimitMode::Safe applies at runtime), for
+    ui/single_leg_view.py's stick-figure coloring.
+
+    "unknown" is a real, honest fourth state, not a default-safe green:
+    a joint with nothing marked in either direction has no assessable
+    safe limit yet, and showing green there would be indistinguishable
+    from "verified and comfortably clear" -- exactly the silent gap this
+    whole visualization exists to make visible instead.
+
+    Thresholds are margin_deg itself, not an arbitrary separate number:
+    red once within one margin's worth of the safe edge (i.e. as close
+    as the margin itself would already put you outside the *mechanical*
+    edge were it this tight), amber within three times that, green
+    beyond -- ties the visualization directly to the same constant
+    that's actually enforced, rather than a second, disconnected
+    threshold someone has to remember to keep in sync.
+    """
+    margins = []
+    if marked_min_deg is not None:
+        margins.append(current_deg - (marked_min_deg + margin_deg))
+    if marked_max_deg is not None:
+        margins.append((marked_max_deg - margin_deg) - current_deg)
+    if not margins:
+        return "unknown"
+    worst = min(margins)
+    if worst <= margin_deg:
+        return "red"
+    if worst <= 3 * margin_deg:
+        return "amber"
+    return "green"
