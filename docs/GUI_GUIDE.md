@@ -42,6 +42,14 @@ no IK, just a direct pulse to that one channel. This is what you use
 *before* assembly: mounting horns, finding out if a servo is dead, finding
 its safe range of motion.
 
+**Test Leg** is for the single fully-assembled test leg — three servos,
+one coxa/femur/tibia, clamped to a table edge, before any of the other
+five legs exist (`reference/ANALYSIS.md`'s bring-up plan). Unlike Bench
+Test, this one *does* know about kinematics: it can drive all three
+joints from a single foot X/Y/Z target, and it's where you actually find
+and mark the leg's real mechanical limits, one joint at a time, with a
+built-in safety rule against jumping into unverified territory.
+
 **Simulator** (only shown when you launched with `--link-mode sim`) is a
 live top-down view of gait — body position/heading and which legs are
 currently planted vs. lifted — driven by the exact same WASD/Q/E/speed/
@@ -51,9 +59,11 @@ grouping, a joint that won't clamp, a command that does the wrong thing)
 before it ever reaches a real servo. See "Using the Simulator tab" below.
 
 If your servos just arrived and nothing is assembled yet, you want **Bench
-Test**. If the robot is built and you're tuning it, you want **Calibrate**.
-If you want to sanity-check gait logic itself — including the link
-failsafe — with no hardware at all, you want **Simulator**.
+Test**. Once you have one leg assembled and clamped down but nothing else
+built, you want **Test Leg**. If the robot is fully built and you're
+tuning it, you want **Calibrate**. If you want to sanity-check gait logic
+itself — including the link failsafe — with no hardware at all, you want
+**Simulator**.
 
 ## Two concepts you need before any of this makes sense
 
@@ -196,6 +206,15 @@ autosave. Export before you close, every time, if the session mattered.
   below.
 - **Range finder nudge buttons (−/+).** Small steps, for creeping toward a
   servo's mechanical limit carefully instead of guessing with the slider.
+- **0° / 90° / 180° convenience buttons.** Quick jumps for horn-pressing,
+  not the servo's literal nominal extremes — 0°/180° actually command a
+  conservative approximation (600us/2400us, not 500us/2500us), since clone
+  servos commonly can't physically reach the true nominal ends and will
+  stall trying. 90° holds indefinitely, same as Park. 0°/180° hold only
+  briefly (a couple of seconds) and then auto-return to 90° on their own —
+  a countdown shows underneath while that's happening. Clicking anything
+  else (slider, nudge, Park, a different convenience button, a sweep or
+  check below) cancels that countdown early.
 - **Mark current pulse as MIN / MAX limit.** Records whatever pulse is
   currently commanded as this servo's safe boundary, under whichever
   future position you've selected below. This is a real safety value the
@@ -210,10 +229,30 @@ autosave. Export before you close, every time, if the session mattered.
   min to max and back to neutral, automatically. Defaults are deliberately
   narrow — widen them yourself once you trust the servo, don't start wide.
   ABORT is always live during a sweep and stops it immediately.
+- **Repeatability check.** Drives 90° → 0° → 90°, pausing a couple of
+  seconds at each stop so you can actually watch it, then asks: did it
+  return to the same point both times? There's no position sensor
+  anywhere in this system — this only paces the sequence for you to look
+  at, the yes/no judgment is entirely yours. Abort stops it and parks at
+  neutral. Starting this (or the hold check below) cancels whatever else
+  was running, and vice versa — only one automated sequence runs at a
+  time.
+- **Hold check.** Parks at neutral and waits 30 seconds so you can listen
+  for hunting or buzzing — a servo that's stalled or miscalibrated will
+  audibly fight to hold position even when told to sit still. Same
+  "you make the call" pattern as the repeatability check: it only times
+  the wait, then asks silent or hunting/buzzing?
 - **"This unit will become" servo selector.** Which future leg/joint
   position you're recording findings for. Independent of the board/channel
   above — the loose servo in your hand doesn't have a leg position yet,
   you're just deciding where its recorded data will end up.
+- **Physical unit ID (optional).** A free-text field for a number you've
+  written on the servo itself with a marker. When filled in, repeatability
+  and hold check results are logged against that instead of the servo
+  selector above — useful if you're tracking a specific physical unit
+  across sessions, or testing it before you've decided its final leg
+  position. Leave it blank and results log against the servo selector as
+  usual.
 - **Health note field + Save note.** Free text per servo — "buzzes at low
   end," "dead," whatever you'll want to remember at 2am on unit #14. Not
   gated by arming; you can always leave a note.
@@ -221,6 +260,77 @@ autosave. Export before you close, every time, if the session mattered.
   from neutral for a while and shows a countdown to when the app will force
   it back to neutral on its own. This is the app actively working against
   you leaving a servo stalled — see below.
+
+## Test Leg tab, control by control
+
+This tab assumes the single test leg is already assembled and clamped
+down, horns already mounted at the angles in `docs/HOW_TO_USE.md` — it's
+for finding real mechanical limits and sanity-checking IK, not for the
+bare-servo bring-up Bench Test covers.
+
+- **Bench arm / disarm + countdown.** The exact same switch as the Bench
+  Test tab's — there is only one bench-armed state on the robot. Arming
+  here also shows as armed on Bench Test, and vice versa.
+- **Leg position selector ("this test leg will become").** Which of the
+  six leg positions (RF/RM/RR/LR/LM/LF) this leg's findings are recorded
+  under — determines which three servo_index slots (coxa/femur/tibia for
+  that leg) get written when you mark a limit.
+- **Channel wiring (coxa / femur / tibia rows).** Which physical PCA9685
+  board+channel each of the three servos is on. Set this up once; both
+  Joint mode and IK mode below use it.
+- **RELEASE LEG.** Instant, always visible regardless of mode — all three
+  joints go limp at once. Not the same as parking at neutral: a park still
+  commands and holds a pulse, this commands nothing. Also fires
+  automatically on the app's global EMERGENCY STOP and on closing the
+  window, same as Bench Test's own servo.
+- **Joint mode / IK mode toggle.** Switches which set of controls is
+  showing below. Both drive the same three servos through the same
+  channel wiring above.
+
+**Joint mode:**
+
+- **Suggested order.** Coxa first (doesn't depend on the other two), then
+  tibia (its check works before the femur horn is even on), then femur
+  (last, once the other two are already fixed) — the identical order and
+  reasoning as the horn-mounting procedure in `docs/HOW_TO_USE.md`.
+- **Per-joint angle display + step buttons (±1° / ±2° / ±5° / ±10°).**
+  Each joint moves independently. Larger step buttons are greyed out in a
+  direction until you've marked a limit there — with nothing marked yet
+  at all, every joint starts 1-degree-only in both directions. This is
+  not a bug: it's what stops a first blind exploration pass from taking a
+  large, untested jump. As you mark limits, the buttons within the
+  now-known-safe side open back up.
+- **Mark current as MIN / MAX (per joint).** Same underlying write as
+  Bench Test's Mark buttons (`record_limit`), scoped to whichever joint's
+  row you click it on. The value to record is 3-5 degrees back from where
+  binding actually starts — not the binding point itself.
+- **Known limits (per joint).** What's currently recorded, in degrees
+  from that joint's own neutral — refreshes automatically after you mark
+  something.
+
+**IK mode:**
+
+- **Foot X / Y / Z (mm).** In this leg's own local frame, not the robot's
+  body frame — there's no body yet. Measure with a ruler from the coxa's
+  own rotation axis: X forward along the coxa's zero direction (straight
+  out from the mount), Y sideways, Z down.
+- **Drive to this target.** Runs the same IK this project's gait uses,
+  clamps the result the same way, and commands all three joints. This is
+  deliberately not step-limited like Joint mode — it jumps straight to
+  the computed target, so use Joint mode first to establish real limits;
+  only limits already marked are enforced here.
+- **Resulting joint angles.** What IK actually computed (after clamping),
+  in degrees from each joint's own neutral — this is where a sign error
+  in the physical build would show up as an obviously-wrong direction of
+  movement for a given target.
+- **Achieved foot position.** The foot position you'd actually get from
+  the joint angles above, recomputed through forward kinematics — not
+  just an echo of what you typed in. If it doesn't match your requested
+  X/Y/Z, IK had to clamp something (the target was out of reach, or a
+  joint angle hit its configured bound), and the tab says so explicitly.
+- **"COMMANDED POSE — NOT MEASURED" banner.** Permanent, not just an IK
+  mode thing. There is no position feedback anywhere in this system — the
+  screen can say one thing while the real leg is bound against plastic.
 
 ## Using the Simulator tab
 
@@ -276,6 +386,33 @@ controls. Everything driving it lives on the Operate tab.
    board/channel to move to the next one (that also re-parks automatically).
 9. Repeat for the next loose servo.
 
+## Walkthrough: finding a real limit on the assembled test leg
+
+1. Leg clamped down, horns already mounted at the angles in
+   `docs/HOW_TO_USE.md`, all three servos wired. Launch `python app.py`.
+   Go to the **Test Leg** tab.
+2. Set the three **channel wiring** rows to match your coxa/femur/tibia
+   wiring, and pick the **leg position** this test leg's findings should
+   be recorded under.
+3. Click **Arm bench mode**. Make sure **Joint mode** is selected.
+4. Pick a joint — coxa first, per the suggested order shown. Click its
+   **+1°** button repeatedly, pausing to watch the leg each time. Larger
+   step buttons stay greyed out until you mark a limit; that's expected
+   with nothing marked yet.
+5. The moment you see or hear binding (a servo working against
+   resistance, not just reaching the end of a comfortable range), stop.
+   Step back 3-5 degrees the way you came — don't record the binding
+   point itself.
+6. Click **Mark current as MIN** (or **MAX**, depending on which
+   direction you were exploring). The known-limits line updates.
+7. Once one side is marked, larger steps open back up on that side (up to
+   the mark) — the other direction is still 1-degree-only until you
+   repeat the process there.
+8. Repeat for tibia, then femur, in that order.
+9. If something looks wrong at any point, click **RELEASE LEG** — it's
+   always visible, works instantly, and doesn't wait for you to finish
+   whatever step you were on.
+
 ## Walkthrough: a full 18-servo calibration session ending in export
 
 1. With the robot assembled and powered, launch `python app.py`. Go to the
@@ -314,14 +451,23 @@ controls. Everything driving it lives on the Operate tab.
   is meant to become a real safety boundary once firmware enforces it.
   Marking a limit based on a guess rather than an actual observed edge
   defeats the point of bench testing in the first place.
+- **Using Test Leg's IK mode before Joint mode has found real limits.**
+  IK mode jumps straight to a computed target — it doesn't have Joint
+  mode's step-size safety rule, since a jump-to-target action doesn't
+  have "the position you were already verified at" for that rule to
+  reason from. Only limits you've already marked in Joint mode are
+  enforced. On a fresh, unmarked leg, an IK target can drive a joint
+  somewhere nobody's confirmed is safe.
 - **Ignoring the unexported-changes warning banner.** If it's showing, the
   robot's current state and your last export have diverged. It won't go
   away on its own — export again to clear it.
 
 ## About that countdown timer
 
-Both arm/disarm countdowns (Calibrate and Bench Test) are the app's *own
-guess*, not a live number the robot is sending every second. The app
+Both arm/disarm countdowns (Calibrate, and Bench Test/Test Leg — which
+share one countdown, since they share one bench-armed state on the robot)
+are the app's *own guess*, not a live number the robot is sending every
+second. The app
 remembers roughly when it last armed or refreshed things and counts down
 locally from the known timeout length. It re-checks the actual
 ARMED/DISARMED state with the robot on every update, so that word is

@@ -230,6 +230,42 @@ leg-invariance check across the full envelope sweep), so the earlier
 show up in this number and doesn't need resolving before mounting this
 one test leg.
 
+## Clamping the test leg for exploration work
+
+Once the three horns are mounted, the leg needs to be held still enough
+to actually explore its limits safely — but clamped in a way that leaves
+the coxa free to do the one thing it's for: rotate.
+
+**Clamp the coxa servo's own body/mounting bracket to the table edge —
+never the horn, never the femur segment, never anything that's supposed
+to move.** The coxa servo housing itself (or whatever fixed plate/stub it
+sits in) is the only part of this assembly that's meant to stay
+perfectly still. Everything downstream of the coxa horn — the femur,
+tibia, and the coxa horn itself — needs to swing freely through its full
+range without hitting the clamp, the table edge, or the table surface.
+
+1. Servo rail **OFF** before you touch any wiring or clamping.
+2. Position the leg so the coxa's rotation axis is vertical and the
+   femur/tibia assembly hangs out past the table edge, with a clear
+   swept volume below and to both sides — nothing the leg could hit while
+   exploring femur/tibia range, since neither has a confirmed limit yet
+   at this point.
+3. Clamp the coxa servo's body/bracket down. Check by hand (servo rail
+   still off, no power) that you can freely rotate the coxa horn through
+   a wide arc and the femur/tibia assembly never touches the clamp, the
+   table, or its own wiring bundle. Reposition now if it does — this is
+   much easier to fix before the rail is live.
+4. Route the three servo cables with enough slack for the full range of
+   motion on every joint, and secure the slack so it can't catch on
+   anything while a joint moves. A snagged cable mid-exploration can pull
+   a connector loose or torque a horn off-tooth.
+5. Servo rail **ON**. Proceed to the **Test Leg** tab
+   (`docs/GUI_GUIDE.md`) for the actual exploration.
+
+If you ever need to reposition the clamp after starting exploration:
+servo rail **OFF** first, same as any other rewiring — don't loosen a
+clamp with the rail live and a servo potentially mid-command.
+
 ## 4. A full calibration session
 
 1. Robot fully assembled. Servo rail **ON**. No USB connected.
