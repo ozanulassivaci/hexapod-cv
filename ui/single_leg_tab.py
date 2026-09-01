@@ -115,6 +115,7 @@ class SingleLegTab(QWidget):
 
         self._view = SingleLegView(self._current_deg, self._known_limits)
         layout.addWidget(self._view, 1)
+        layout.addWidget(self._build_commanded_not_measured_label())
 
         layout.addWidget(self._build_mode_toggle())
 
@@ -123,7 +124,6 @@ class SingleLegTab(QWidget):
         self._stack.addWidget(self._build_ik_mode())
         layout.addWidget(self._stack)
 
-        layout.addWidget(self._build_commanded_not_measured_label())
         layout.addStretch(1)
 
         self._set_controls_enabled(False)
