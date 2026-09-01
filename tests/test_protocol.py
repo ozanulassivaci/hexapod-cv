@@ -1,4 +1,5 @@
 import json
+import math
 
 import pytest
 
@@ -326,25 +327,41 @@ def test_pulse_at_neutral_gives_zero_degrees():
 
 
 def test_pulse_to_deg_matches_bench_envelope_endpoints():
-    # Coxa: [500, 2500]us around neutral 1500 spans exactly [-90, +90].
+    # Coxa: [500, 2500]us around neutral 1500 spans exactly [-90, +90] --
+    # NEUTRAL_PULSE_US is a fixed hobby-servo fact, not mount-dependent.
     assert pulse_us_to_deg_from_neutral(BENCH_PULSE_MIN_US, 0) == pytest.approx(-90.0)
     assert pulse_us_to_deg_from_neutral(BENCH_PULSE_MAX_US, 0) == pytest.approx(90.0)
-    # Tibia: [500, 2500]us around neutral 500 (zero-based) spans [0, +180].
-    assert pulse_us_to_deg_from_neutral(BENCH_PULSE_MIN_US, 2) == pytest.approx(0.0)
-    assert pulse_us_to_deg_from_neutral(BENCH_PULSE_MAX_US, 2) == pytest.approx(180.0)
+    # Tibia: zero-based, but TIBIA_NEUTRAL_PULSE_US is a per-mount
+    # calibration value (docs/HOW_TO_USE.md's mounting section), not
+    # fixed at either bench envelope endpoint -- so the span it implies
+    # is computed from the live constant, not hardcoded, and shifts if
+    # that constant is ever updated from a real measurement.
+    us_per_deg = (BENCH_PULSE_MAX_US - BENCH_PULSE_MIN_US) / 180.0
+    expected_lo = (BENCH_PULSE_MIN_US - TIBIA_NEUTRAL_PULSE_US) / us_per_deg
+    expected_hi = (BENCH_PULSE_MAX_US - TIBIA_NEUTRAL_PULSE_US) / us_per_deg
+    assert pulse_us_to_deg_from_neutral(BENCH_PULSE_MIN_US, 2) == pytest.approx(expected_lo)
+    assert pulse_us_to_deg_from_neutral(BENCH_PULSE_MAX_US, 2) == pytest.approx(expected_hi)
 
 
 def test_angle_to_pulse_is_the_inverse_of_pulse_to_deg_at_zero_offset():
     # sign=1, offset_us=0 (bench mode's own convention -- no calibration
     # applied) must round-trip exactly for both joint conventions. Offset
-    # ranges kept inside each joint's own valid degFromNeutral span
-    # ([-90, 90] for coxa, [0, 180] for tibia) so nothing clips at the
-    # BENCH_PULSE_MIN/MAX_US envelope -- that's a separate, deliberate
-    # behavior covered by its own test below, not what this one checks.
-    for servo_index, offsets in ((0, range(-80, 81, 10)), (2, range(10, 171, 10))):
+    # ranges are derived from each joint's own valid degFromNeutral span
+    # (computed from the live constants, not hardcoded -- coxa's is a
+    # fixed [-90, 90], but tibia's shifts with TIBIA_NEUTRAL_PULSE_US, a
+    # per-mount calibration value) with a 10-degree margin on each end,
+    # so nothing clips at the BENCH_PULSE_MIN/MAX_US envelope -- that's a
+    # separate, deliberate behavior covered by its own test below, not
+    # what this one checks.
+    for servo_index in (0, 2):
         neutral_deg = neutral_servo_deg_for_servo(servo_index)
         neutral_pulse = neutral_pulse_us_for_servo(servo_index)
-        for deg in offsets:
+        span_lo = pulse_us_to_deg_from_neutral(BENCH_PULSE_MIN_US, servo_index)
+        span_hi = pulse_us_to_deg_from_neutral(BENCH_PULSE_MAX_US, servo_index)
+        margin = 10.0
+        lo = int(math.ceil((span_lo + margin) / 10.0)) * 10
+        hi = int(math.floor((span_hi - margin) / 10.0)) * 10
+        for deg in range(lo, hi + 1, 10):
             pulse = angle_to_pulse_us(neutral_deg + deg, neutral_deg, neutral_pulse, 1, 0)
             recovered = pulse_us_to_deg_from_neutral(pulse, servo_index)
             assert recovered == pytest.approx(deg, abs=0.1)

@@ -50,16 +50,31 @@
 #define BENCH_PULSE_MAX_US 2500
 #define HEALTH_NOTE_MAX_LEN 500
 
-// AngleToPulse's neutral pulse for the tibia joint specifically. Coxa and
+// AngleToPulse's neutral pulse for the tibia joint specifically -- the
+// pulse that means "tibia dead straight" (kinematic zero). Coxa and
 // femur are bipolar around NEUTRAL_PULSE_US (servo command 90 = straight
-// leg's servo-degree neutral); the tibia horn is mounted such that 0, not
-// 90, is straight (ANALYSIS.md Section 2's undocumented hardware
-// coupling -- there is no way to verify or correct this in software).
-// PLACEHOLDER -- assumes the tibia's 0-degree servo command lands at the
-// nominal envelope minimum. MEASURE ME once assembled: command the tibia
-// to visually-straight-leg and record the pulse a servo tester shows,
-// same procedure as the oscillator frequency measurement.
-#define TIBIA_NEUTRAL_PULSE_US BENCH_PULSE_MIN_US
+// leg's servo-degree neutral); the tibia horn is zero-based instead (0,
+// not 90, is straight -- ANALYSIS.md Section 2). ANALYSIS.md flags that
+// as an undocumented hardware coupling with "no way to verify or correct
+// in software" -- true of the reference firmware, which wrote raw
+// Servo::write() with no calibration layer at all. It doesn't apply
+// here: this constant *is* that missing calibration point, decoupling
+// kinematic zero from wherever the servo's own physical zero happens to
+// land, the same way NEUTRAL_PULSE_US already does for coxa/femur.
+//
+// TARGET, not yet measured: docs/HOW_TO_USE.md's mounting procedure
+// mounts every joint's horn with the servo commanded to its own 1500us
+// center while the segment is held at that joint's gait-envelope
+// midpoint -- for tibia, a ~77-degree fold from straight. Under that
+// mounting, "dead straight" (tibia_servo = 0) works out to ~1500 -
+// 77 degrees * kUsPerDeg =~ 645us. Carries the same up to +-7.2 degree
+// (~80us) spline-tooth uncertainty as every other mounted joint here --
+// MEASURE ME once assembled: command pulses near 645 and record the one
+// where the tibia reads dead straight against the femur's own line, same
+// procedure as the oscillator frequency measurement. Update this and
+// transport/protocol.py's mirrored constant together if the measured
+// value differs meaningfully.
+#define TIBIA_NEUTRAL_PULSE_US 645
 
 // The margin subtracted inward from each end of a servo's bench-recorded
 // mechanical limit (ServoProfile.h's minDegFromNeutral/maxDegFromNeutral

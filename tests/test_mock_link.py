@@ -343,10 +343,10 @@ def test_calibrate_write_preserves_bench_recorded_limits_and_note():
     profile = link.latest_telemetry().profiles[5]
     assert profile.offset_us == 30
     assert profile.sign == -1
-    # servo_index=5 is a tibia (5 % 3 == 2, neutral=TIBIA_NEUTRAL_PULSE_US=500):
-    # (950-500)/(2000/180) = 40.5, (2050-500)/(2000/180) = 139.5.
-    assert profile.min_deg_from_neutral == pytest.approx(40.5)
-    assert profile.max_deg_from_neutral == pytest.approx(139.5)
+    # servo_index=5 is a tibia (5 % 3 == 2, neutral=TIBIA_NEUTRAL_PULSE_US=645):
+    # (950-645)/(2000/180) = 27.45, (2050-645)/(2000/180) = 126.45.
+    assert profile.min_deg_from_neutral == pytest.approx(27.45)
+    assert profile.max_deg_from_neutral == pytest.approx(126.45)
     assert profile.note == "slight buzz near max"
 
 

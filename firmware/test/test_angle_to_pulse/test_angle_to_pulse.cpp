@@ -61,12 +61,21 @@ void test_pulse_at_neutral_gives_zero_degrees(void) {
 }
 
 void test_pulse_to_deg_matches_bench_envelope_endpoints(void) {
-    // Coxa/femur: [500, 2500]us around neutral 1500 spans exactly [-90, +90].
+    // Coxa/femur: [500, 2500]us around neutral 1500 spans exactly [-90, +90]
+    // -- NEUTRAL_PULSE_US is a fixed hobby-servo fact, not mount-dependent.
     TEST_ASSERT_FLOAT_WITHIN(1e-3f, -90.0f, pulseUsToDegFromNeutral(BENCH_PULSE_MIN_US, NEUTRAL_PULSE_US));
     TEST_ASSERT_FLOAT_WITHIN(1e-3f, 90.0f, pulseUsToDegFromNeutral(BENCH_PULSE_MAX_US, NEUTRAL_PULSE_US));
-    // Tibia: [500, 2500]us around neutral 500 (zero-based) spans [0, +180].
-    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 0.0f, pulseUsToDegFromNeutral(BENCH_PULSE_MIN_US, TIBIA_NEUTRAL_PULSE_US));
-    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 180.0f, pulseUsToDegFromNeutral(BENCH_PULSE_MAX_US, TIBIA_NEUTRAL_PULSE_US));
+    // Tibia: zero-based, but TIBIA_NEUTRAL_PULSE_US is a per-mount
+    // calibration value (docs/HOW_TO_USE.md's mounting section), not
+    // fixed at either bench envelope endpoint -- computed from the live
+    // constant rather than hardcoded, so this doesn't silently start
+    // failing the next time that constant is updated from a real
+    // measurement.
+    float usPerDeg = (static_cast<float>(BENCH_PULSE_MAX_US) - static_cast<float>(BENCH_PULSE_MIN_US)) / 180.0f;
+    float expectedLow = (static_cast<float>(BENCH_PULSE_MIN_US) - static_cast<float>(TIBIA_NEUTRAL_PULSE_US)) / usPerDeg;
+    float expectedHigh = (static_cast<float>(BENCH_PULSE_MAX_US) - static_cast<float>(TIBIA_NEUTRAL_PULSE_US)) / usPerDeg;
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, expectedLow, pulseUsToDegFromNeutral(BENCH_PULSE_MIN_US, TIBIA_NEUTRAL_PULSE_US));
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, expectedHigh, pulseUsToDegFromNeutral(BENCH_PULSE_MAX_US, TIBIA_NEUTRAL_PULSE_US));
 }
 
 void test_pulse_to_deg_is_the_inverse_of_angle_to_pulse_at_zero_offset(void) {

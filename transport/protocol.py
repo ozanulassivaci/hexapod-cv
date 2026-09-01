@@ -38,13 +38,17 @@ BENCH_PULSE_MAX_US = 2500
 NEUTRAL_PULSE_US = 1500  # nominal hobby-servo center; per-unit correction is offset_us, applied later
 # Coxa/femur are bipolar around NEUTRAL_PULSE_US (servo command 90 = straight);
 # tibia is zero-based -- its horn is mounted so 0, not 90, is straight
-# (ANALYSIS.md Section 2's undocumented hardware coupling). Mirrors
-# firmware/include/Config.h's TIBIA_NEUTRAL_PULSE_US -- same
-# hand-copied-with-cross-reference pattern as NEUTRAL_PULSE_US/
-# BENCH_PULSE_MIN_US/MAX_US above (see scripts/gen_protocol_constants.py's
-# docstring for why this isn't codegen'd: a mismatch here is a rejected
-# command, not a misfired failsafe).
-TIBIA_NEUTRAL_PULSE_US = BENCH_PULSE_MIN_US
+# (ANALYSIS.md Section 2). Mirrors firmware/include/Config.h's
+# TIBIA_NEUTRAL_PULSE_US -- same hand-copied-with-cross-reference pattern
+# as NEUTRAL_PULSE_US/BENCH_PULSE_MIN_US/MAX_US above (see
+# scripts/gen_protocol_constants.py's docstring for why this isn't
+# codegen'd: a mismatch here is a rejected command, not a misfired
+# failsafe). 645us is the target under docs/HOW_TO_USE.md's mounting
+# procedure (servo commanded to its own 1500us center while the tibia is
+# held at its gait-envelope-midpoint fold, ~77 degrees) -- not yet a real
+# measurement; see Config.h's copy of this constant for the derivation
+# and the required post-mount verification.
+TIBIA_NEUTRAL_PULSE_US = 645
 HEALTH_NOTE_MAX_LEN = 500
 
 _US_PER_DEG = (BENCH_PULSE_MAX_US - BENCH_PULSE_MIN_US) / 180.0
