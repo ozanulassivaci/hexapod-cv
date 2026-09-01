@@ -61,6 +61,16 @@
 // same procedure as the oscillator frequency measurement.
 #define TIBIA_NEUTRAL_PULSE_US BENCH_PULSE_MIN_US
 
+// The margin subtracted inward from each end of a servo's bench-recorded
+// mechanical limit (ServoProfile.h's minDegFromNeutral/maxDegFromNeutral
+// -- where printed parts actually collide) to get the *safe* limit gait
+// output is enforced against (GatedServoDriver.h's
+// LimitMode::Safe). Deliberately not applied to bench mode's own
+// enforcement (LimitMode::Mechanical) -- exploration needs to reach the
+// true mechanical edge to find it, not stop short of it by the margin.
+// Mirrors robot/kinematics.py's SAFE_LIMIT_MARGIN_DEG.
+#define SAFE_LIMIT_MARGIN_DEG 5.0f
+
 // Fault flag bits, mirrors transport/protocol.py's FAULT_* constants.
 // LINK_TIMEOUT, SERVO_FAULT (set when the gait control loop's computed
 // pulse is refused by GatedServoDriver against a bench-recorded limit --

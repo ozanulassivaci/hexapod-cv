@@ -276,7 +276,8 @@ static void handleCommand(const Command& cmd, uint32_t seq, Telemetry& out) {
             }
             const char* reason = nullptr;
             bool applied = gatedDriver.commandPulse(cmd.board, cmd.channel, cmd.pulseUs, cmd.hasServoIndex,
-                                                      cmd.servoIndex, degFromNeutral, &reason);
+                                                      cmd.servoIndex, degFromNeutral, LimitMode::Mechanical,
+                                                      &reason);
             if (!applied) {
                 out.ok = false;
                 std::strncpy(out.error, reason, sizeof(out.error) - 1);
@@ -366,7 +367,7 @@ static bool driveGaitOutputs() {
             float degFromNeutral = j.servoDeg - j.neutralServoDeg;
             const char* reason = nullptr;
             bool applied = gatedDriver.commandPulse(entry.board, entry.channel, pulseUs, true, servoIndex,
-                                                      degFromNeutral, &reason);
+                                                      degFromNeutral, LimitMode::Safe, &reason);
             if (!applied) anyRefused = true;
         }
     }
@@ -500,7 +501,8 @@ static void processSerialLine(String line) {
             }
             const char* reason = nullptr;
             bool applied = gatedDriver.commandPulse(static_cast<uint8_t>(board), static_cast<uint8_t>(channel),
-                                                      static_cast<uint16_t>(pulseUs), false, 0, 0.0f, &reason);
+                                                      static_cast<uint16_t>(pulseUs), false, 0, 0.0f,
+                                                      LimitMode::Mechanical, &reason);
             if (!applied) {
                 Serial.print("rejected: ");
                 Serial.println(reason);
@@ -616,16 +618,28 @@ void loop() {
         }
         // Level-triggered on the tick that just ran -- the cumulative
         // ikClipCount/jointClipCount in telemetry are the diagnostic
-        // detail behind this bit, not what it's derived from. Today gait
-        // is the only mode, and the verified-safe envelope means any
-        // clip here is genuinely anomalous (see GaitState's docstring in
-        // Gait.h) -- once Test Leg exploration mode exists, that code
-        // needs to stop setting this bit while exploration is deliberate.
+        // detail behind this bit, not what it's derived from. The
+        // verified-safe gait envelope means any clip here is genuinely
+        // anomalous (see GaitState's docstring in Gait.h).
         if (gaitEngine.state().clippedThisTick) {
             faultFlags |= FAULT_IK_CLIP_BIT;
         } else {
             faultFlags &= ~FAULT_IK_CLIP_BIT;
         }
+    } else {
+        // Gait isn't ticking (link timeout, or bench mode armed -- Test
+        // Leg exploration will be bench-gated too, same mutual exclusion
+        // as Bench Test today, docs/protocol.md Section 8). Neither fault
+        // can be actively true right now, so both must be cleared, not
+        // left frozen at whatever they were the instant gait stopped --
+        // a stale FAULT_IK_CLIP stuck on from whatever gait was doing the
+        // moment before bench armed would misleadingly persist through an
+        // entire Test Leg session, where deliberately probing a joint's
+        // real limit is the whole point and would otherwise read as the
+        // exact anomaly this bit exists to flag during real gait
+        // (docs/protocol.md Section 10).
+        faultFlags &= ~FAULT_SERVO_FAULT_BIT;
+        faultFlags &= ~FAULT_IK_CLIP_BIT;
     }
 
     delay(CONTROL_LOOP_INTERVAL_MS);

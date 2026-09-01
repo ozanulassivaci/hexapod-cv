@@ -38,6 +38,20 @@ FEMUR_MAX_DEG = 90.0
 TIBIA_MIN_DEG = -180.0
 TIBIA_MAX_DEG = 0.0
 
+# The margin subtracted inward from each end of a servo's bench-recorded
+# mechanical limit (transport.protocol.ServoProfile's
+# min_deg_from_neutral/max_deg_from_neutral -- where printed parts
+# actually collide) to get the *safe* limit gait output is enforced
+# against (firmware's GatedServoDriver, LimitMode::Safe). Deliberately not
+# applied to bench mode's own enforcement (LimitMode::Mechanical) --
+# exploration needs to reach the true mechanical edge to find it, not
+# stop short of it by the margin. Mirrors firmware/include/Config.h's
+# SAFE_LIMIT_MARGIN_DEG -- same hand-copied-with-cross-reference pattern
+# as NEUTRAL_PULSE_US (a mismatch here changes how much margin is
+# actually enforced, not a runtime-cross-checked value like
+# link_timeout_s, so it doesn't go through scripts/gen_protocol_constants.py).
+SAFE_LIMIT_MARGIN_DEG = 5.0
+
 
 @dataclass(frozen=True)
 class Leg:

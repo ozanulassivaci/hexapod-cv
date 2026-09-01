@@ -44,7 +44,7 @@ void test_applies_pulse_with_no_servo_index(void) {
     GatedServoDriver driver(output, store);
 
     const char* reason = nullptr;
-    bool applied = driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 1500, false, 0, 0.0f, &reason);
+    bool applied = driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 1500, false, 0, 0.0f, LimitMode::Mechanical, &reason);
 
     TEST_ASSERT_TRUE(applied);
     auto key = std::make_pair<uint8_t, uint8_t>(PCA9685_ADDR_BOARD_A, 3);
@@ -63,7 +63,7 @@ void test_applies_pulse_within_recorded_limits(void) {
     GatedServoDriver driver(output, store);
 
     const char* reason = nullptr;
-    bool applied = driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 1500, true, 5, 0.0f, &reason);
+    bool applied = driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 1500, true, 5, 0.0f, LimitMode::Mechanical, &reason);
 
     TEST_ASSERT_TRUE(applied);
     auto key = std::make_pair<uint8_t, uint8_t>(PCA9685_ADDR_BOARD_A, 3);
@@ -80,7 +80,7 @@ void test_refuses_pulse_below_recorded_min(void) {
     GatedServoDriver driver(output, store);
 
     const char* reason = nullptr;
-    bool applied = driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 900, true, 5, -50.0f, &reason);
+    bool applied = driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 900, true, 5, -50.0f, LimitMode::Mechanical, &reason);
 
     TEST_ASSERT_FALSE(applied);
     TEST_ASSERT_NOT_NULL(reason);
@@ -100,7 +100,7 @@ void test_refuses_pulse_above_recorded_max(void) {
     GatedServoDriver driver(output, store);
 
     const char* reason = nullptr;
-    bool applied = driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 2100, true, 5, 50.0f, &reason);
+    bool applied = driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 2100, true, 5, 50.0f, LimitMode::Mechanical, &reason);
 
     TEST_ASSERT_FALSE(applied);
     auto key = std::make_pair<uint8_t, uint8_t>(PCA9685_ADDR_BOARD_A, 3);
@@ -119,8 +119,8 @@ void test_boundary_values_are_accepted(void) {
     GatedServoDriver driver(output, store);
 
     const char* reason = nullptr;
-    TEST_ASSERT_TRUE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 1000, true, 5, -45.0f, &reason));
-    TEST_ASSERT_TRUE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 2000, true, 5, 45.0f, &reason));
+    TEST_ASSERT_TRUE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 1000, true, 5, -45.0f, LimitMode::Mechanical, &reason));
+    TEST_ASSERT_TRUE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 2000, true, 5, 45.0f, LimitMode::Mechanical, &reason));
 }
 
 void test_no_recorded_limits_allows_any_in_range_pulse(void) {
@@ -132,8 +132,64 @@ void test_no_recorded_limits_allows_any_in_range_pulse(void) {
     // degFromNeutral values here are deliberately extreme -- with no
     // recorded limit, hasMinDeg/hasMaxDeg are false and no comparison
     // happens at all, regardless of the value.
-    TEST_ASSERT_TRUE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, BENCH_PULSE_MIN_US, true, 5, -1000.0f, &reason));
-    TEST_ASSERT_TRUE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, BENCH_PULSE_MAX_US, true, 5, 1000.0f, &reason));
+    TEST_ASSERT_TRUE(
+        driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, BENCH_PULSE_MIN_US, true, 5, -1000.0f, LimitMode::Mechanical, &reason));
+    TEST_ASSERT_TRUE(
+        driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, BENCH_PULSE_MAX_US, true, 5, 1000.0f, LimitMode::Mechanical, &reason));
+}
+
+// --- LimitMode: Safe applies the margin, Mechanical never does -----------
+
+void test_safe_mode_refuses_within_margin_of_mechanical_limit(void) {
+    FakeServoOutput output;
+    FakeServoProfileStore store;
+    ServoProfile p = ServoProfile::defaultFor(5);
+    p.hasMinDeg = true;
+    p.minDegFromNeutral = -45.0f;
+    p.hasMaxDeg = true;
+    p.maxDegFromNeutral = 45.0f;
+    store.set(5, p);
+    GatedServoDriver driver(output, store);
+
+    const char* reason = nullptr;
+    // -45 + SAFE_LIMIT_MARGIN_DEG(5) = -40 is the safe boundary -- one
+    // degree inside the mechanical limit but still within the margin
+    // must be refused under Safe, even though Mechanical would accept it.
+    TEST_ASSERT_FALSE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 1000, true, 5, -41.0f, LimitMode::Safe, &reason));
+    TEST_ASSERT_FALSE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 2000, true, 5, 41.0f, LimitMode::Safe, &reason));
+}
+
+void test_safe_mode_accepts_up_to_the_margined_boundary(void) {
+    FakeServoOutput output;
+    FakeServoProfileStore store;
+    ServoProfile p = ServoProfile::defaultFor(5);
+    p.hasMinDeg = true;
+    p.minDegFromNeutral = -45.0f;
+    p.hasMaxDeg = true;
+    p.maxDegFromNeutral = 45.0f;
+    store.set(5, p);
+    GatedServoDriver driver(output, store);
+
+    const char* reason = nullptr;
+    TEST_ASSERT_TRUE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 1000, true, 5, -40.0f, LimitMode::Safe, &reason));
+    TEST_ASSERT_TRUE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 2000, true, 5, 40.0f, LimitMode::Safe, &reason));
+}
+
+void test_mechanical_mode_reaches_the_true_edge_safe_mode_refuses(void) {
+    // The whole point of the Mechanical/Safe split: bench exploration
+    // (Mechanical) must be able to reach the exact recorded mechanical
+    // bound to have found it in the first place; gait (Safe) must not.
+    FakeServoOutput output;
+    FakeServoProfileStore store;
+    ServoProfile p = ServoProfile::defaultFor(5);
+    p.hasMaxDeg = true;
+    p.maxDegFromNeutral = 45.0f;
+    store.set(5, p);
+    GatedServoDriver driver(output, store);
+
+    const char* reason = nullptr;
+    TEST_ASSERT_TRUE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 2100, true, 5, 45.0f, LimitMode::Mechanical, &reason));
+    TEST_ASSERT_FALSE(driver.commandPulse(PCA9685_ADDR_BOARD_A, 3, 2100, true, 5, 45.0f, LimitMode::Safe, &reason));
 }
 
 void test_release_forwards_to_output(void) {
@@ -164,6 +220,9 @@ int main(int argc, char** argv) {
     RUN_TEST(test_refuses_pulse_above_recorded_max);
     RUN_TEST(test_boundary_values_are_accepted);
     RUN_TEST(test_no_recorded_limits_allows_any_in_range_pulse);
+    RUN_TEST(test_safe_mode_refuses_within_margin_of_mechanical_limit);
+    RUN_TEST(test_safe_mode_accepts_up_to_the_margined_boundary);
+    RUN_TEST(test_mechanical_mode_reaches_the_true_edge_safe_mode_refuses);
     RUN_TEST(test_release_forwards_to_output);
     RUN_TEST(test_release_all_covers_every_channel_on_both_boards);
     return UNITY_END();
