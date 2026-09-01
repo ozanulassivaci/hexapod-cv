@@ -34,6 +34,7 @@ from transport.protocol import (
 )
 from ui.bench_tab import BenchTab
 from ui.calibration_tab import CalibrationTab
+from ui.single_leg_tab import SingleLegTab
 from ui.control_panel import ControlPanel
 from ui.log_panel import LogPanel
 from ui.video_panel import VideoPanel
@@ -103,6 +104,7 @@ class MainWindow(QMainWindow):
             default_sweep_max_us=config.bench.default_sweep_max_us,
             default_sweep_duration_s=config.bench.default_sweep_duration_s,
         )
+        self.single_leg_tab = SingleLegTab(link)
         self.log_panel = LogPanel()
         # Only meaningful against a simulated link -- shown as its own
         # tab (not always present) so mock/udp sessions aren't shown an
@@ -132,6 +134,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(operate_tab, "Operate")
         tabs.addTab(self.calibration_tab, "Calibrate")
         tabs.addTab(self.bench_tab, "Bench Test")
+        tabs.addTab(self.single_leg_tab, "Test Leg")
         if self.sim_view is not None:
             tabs.addTab(self.sim_view, "Simulator")
 
@@ -150,6 +153,7 @@ class MainWindow(QMainWindow):
         self.control_panel.estop_clicked.connect(self._on_estop)
         self.calibration_tab.log_message.connect(self.log_panel.log)
         self.bench_tab.log_message.connect(self.log_panel.log)
+        self.single_leg_tab.log_message.connect(self.log_panel.log)
 
     # --- keyboard: current intent lives here, not in a resend timer -------
 
@@ -221,6 +225,7 @@ class MainWindow(QMainWindow):
         self._ensure_manual_mode()
         self._send_and_log(StopCommand(), source="ESTOP")
         self.bench_tab.emergency_stop()
+        self.single_leg_tab.emergency_stop()
 
     # --- mode ------------------------------------------------------
 
@@ -286,6 +291,7 @@ class MainWindow(QMainWindow):
         self.control_panel.set_telemetry(telemetry, self._last_rtt_ms)
         self.calibration_tab.tick(telemetry)
         self.bench_tab.tick(telemetry)
+        self.single_leg_tab.tick(telemetry)
         if self.sim_view is not None:
             self.sim_view.tick()
 
@@ -338,6 +344,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self.bench_tab.emergency_stop()  # don't leave a servo held away from neutral unattended
+        self.single_leg_tab.emergency_stop()
         self._tick_timer.stop()
         self.stream.stop()
         self.link.close()
