@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from control.bench import BenchSafetyConfig, DwellGuard, SweepPlan
+from control.bench import BenchSafetyConfig, DwellGuard, HoldCheck, MomentaryHold, RepeatabilityCheck, SweepPlan
 from transport.generated_constants import BENCH_ARM_TIMEOUT_S
 from transport.link import RobotLink
 from transport.protocol import (
@@ -62,6 +62,22 @@ _SEND_TIMEOUT_S = 0.5
 _ARMED_STYLE = "color: #ffb300; font-weight: bold;"
 _DWELL_WARNING_STYLE = "background-color: #b71c1c; color: white; padding: 6px; font-weight: bold;"
 _NOTE_STYLE = "color: #9e9e9e; font-style: italic;"
+
+# A conservative stand-in for the servo's true 0/180 degree pulses, not
+# BENCH_PULSE_MIN_US/MAX_US themselves -- clone MG996Rs are commonly unable
+# to physically reach the nominal extremes at all, and holding one there
+# while it stalls trying is exactly the "silently truncated value with no
+# feedback" this whole tab exists to avoid. NEUTRAL_PULSE_US (1500us, "90
+# degrees") is the third convenience point and needs no separate constant.
+_CONVENIENCE_MIN_US = 600
+_CONVENIENCE_MAX_US = 2400
+# 0/180 buttons drive toward an extreme on purpose -- this is a much
+# shorter, unconditional window than DwellGuard's own (default 8s,
+# away-from-neutral-only) timeout, since the point here is a brief look
+# while pressing a horn on, not open-ended exploration.
+_MOMENTARY_HOLD_S = 2.0
+_REPEATABILITY_STEP_HOLD_S = 2.0
+_HOLD_CHECK_S = 30.0
 
 
 class BenchTab(QWidget):
@@ -102,15 +118,20 @@ class BenchTab(QWidget):
         self._current_pulse: int = NEUTRAL_PULSE_US
         self._active_sweep: SweepPlan | None = None
         self._sweep_started_at: float | None = None
+        self._momentary_hold = MomentaryHold(hold_s=_MOMENTARY_HOLD_S)
+        self._repeatability = RepeatabilityCheck(step_hold_s=_REPEATABILITY_STEP_HOLD_S)
+        self._hold_check = HoldCheck(hold_s=_HOLD_CHECK_S)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._build_note_section())
         layout.addWidget(self._build_arm_section())
         layout.addWidget(self._build_channel_section())
         layout.addWidget(self._build_pulse_section())
+        layout.addWidget(self._build_convenience_section())
         layout.addWidget(
             self._build_sweep_section(default_sweep_min_us, default_sweep_max_us, default_sweep_duration_s)
         )
+        layout.addWidget(self._build_checks_section())
         layout.addWidget(self._build_servo_section())
         layout.addWidget(self._build_dwell_warning())
         layout.addStretch(1)
@@ -212,6 +233,44 @@ class BenchTab(QWidget):
 
         return box
 
+    def _build_convenience_section(self) -> QGroupBox:
+        box = QGroupBox("Convenience positions (for horn-pressing)")
+        layout = QVBoxLayout(box)
+
+        note = QLabel(
+            "0/180 are a conservative stand-in for the true extremes "
+            f"({_CONVENIENCE_MIN_US}/{_CONVENIENCE_MAX_US}us, not the full "
+            f"{BENCH_PULSE_MIN_US}/{BENCH_PULSE_MAX_US}us envelope) -- clone "
+            "servos often can't physically reach nominal 0/180 and will stall "
+            "trying. They hold only briefly (auto-return to 90 after "
+            f"{_MOMENTARY_HOLD_S:.0f}s); 90 holds indefinitely, exactly like Park."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(_NOTE_STYLE)
+        layout.addWidget(note)
+
+        button_row = QHBoxLayout()
+        zero_button = QPushButton("0° (brief hold)")
+        zero_button.setFocusPolicy(Qt.NoFocus)
+        zero_button.clicked.connect(lambda: self._on_convenience_clicked(_CONVENIENCE_MIN_US))
+        ninety_button = QPushButton("90° (holds)")
+        ninety_button.setFocusPolicy(Qt.NoFocus)
+        ninety_button.clicked.connect(lambda: self._on_convenience_clicked(NEUTRAL_PULSE_US))
+        oneeighty_button = QPushButton("180° (brief hold)")
+        oneeighty_button.setFocusPolicy(Qt.NoFocus)
+        oneeighty_button.clicked.connect(lambda: self._on_convenience_clicked(_CONVENIENCE_MAX_US))
+        button_row.addWidget(zero_button)
+        button_row.addWidget(ninety_button)
+        button_row.addWidget(oneeighty_button)
+        layout.addLayout(button_row)
+        self._convenience_buttons = (zero_button, ninety_button, oneeighty_button)
+
+        self._momentary_hold_label = QLabel("")
+        self._momentary_hold_label.setFocusPolicy(Qt.NoFocus)
+        layout.addWidget(self._momentary_hold_label)
+
+        return box
+
     def _build_sweep_section(self, default_min: int, default_max: int, default_duration: float) -> QGroupBox:
         box = QGroupBox("Sweep test (one pass, always abortable)")
         layout = QVBoxLayout(box)
@@ -256,6 +315,80 @@ class BenchTab(QWidget):
         button_row.addWidget(self._sweep_start_button)
         button_row.addWidget(self._sweep_abort_button)
         layout.addLayout(button_row)
+
+        return box
+
+    def _build_checks_section(self) -> QGroupBox:
+        box = QGroupBox("Repeatability and hold checks")
+        layout = QVBoxLayout(box)
+
+        note = QLabel(
+            "There is no position feedback anywhere in this system -- both "
+            "checks only pace a guided sequence for you to watch or listen "
+            "to. Whether it passed is always your own judgment, recorded by "
+            "clicking Yes/No below when asked."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(_NOTE_STYLE)
+        layout.addWidget(note)
+
+        repeat_row = QHBoxLayout()
+        self._repeatability_start_button = QPushButton("Start repeatability check (90 -> 0 -> 90)")
+        self._repeatability_start_button.setFocusPolicy(Qt.NoFocus)
+        self._repeatability_start_button.clicked.connect(self._on_start_repeatability_clicked)
+        self._repeatability_abort_button = QPushButton("Abort")
+        self._repeatability_abort_button.setFocusPolicy(Qt.NoFocus)
+        self._repeatability_abort_button.clicked.connect(self._on_abort_repeatability_clicked)
+        self._repeatability_abort_button.setEnabled(False)
+        repeat_row.addWidget(self._repeatability_start_button)
+        repeat_row.addWidget(self._repeatability_abort_button)
+        layout.addLayout(repeat_row)
+
+        self._repeatability_status_label = QLabel("")
+        self._repeatability_status_label.setFocusPolicy(Qt.NoFocus)
+        layout.addWidget(self._repeatability_status_label)
+
+        repeat_answer_row = QHBoxLayout()
+        self._repeatability_yes_button = QPushButton("Yes -- same point")
+        self._repeatability_yes_button.setFocusPolicy(Qt.NoFocus)
+        self._repeatability_yes_button.clicked.connect(lambda: self._on_repeatability_answer(True))
+        self._repeatability_no_button = QPushButton("No -- different point")
+        self._repeatability_no_button.setFocusPolicy(Qt.NoFocus)
+        self._repeatability_no_button.clicked.connect(lambda: self._on_repeatability_answer(False))
+        repeat_answer_row.addWidget(self._repeatability_yes_button)
+        repeat_answer_row.addWidget(self._repeatability_no_button)
+        layout.addLayout(repeat_answer_row)
+        self._repeatability_answer_buttons = (self._repeatability_yes_button, self._repeatability_no_button)
+        self._set_repeatability_answer_buttons_visible(False)
+
+        hold_row = QHBoxLayout()
+        self._hold_check_start_button = QPushButton(f"Start hold check ({_HOLD_CHECK_S:.0f}s at neutral)")
+        self._hold_check_start_button.setFocusPolicy(Qt.NoFocus)
+        self._hold_check_start_button.clicked.connect(self._on_start_hold_check_clicked)
+        self._hold_check_abort_button = QPushButton("Abort")
+        self._hold_check_abort_button.setFocusPolicy(Qt.NoFocus)
+        self._hold_check_abort_button.clicked.connect(self._on_abort_hold_check_clicked)
+        self._hold_check_abort_button.setEnabled(False)
+        hold_row.addWidget(self._hold_check_start_button)
+        hold_row.addWidget(self._hold_check_abort_button)
+        layout.addLayout(hold_row)
+
+        self._hold_check_status_label = QLabel("")
+        self._hold_check_status_label.setFocusPolicy(Qt.NoFocus)
+        layout.addWidget(self._hold_check_status_label)
+
+        hold_answer_row = QHBoxLayout()
+        self._hold_check_yes_button = QPushButton("Silent")
+        self._hold_check_yes_button.setFocusPolicy(Qt.NoFocus)
+        self._hold_check_yes_button.clicked.connect(lambda: self._on_hold_check_answer(True))
+        self._hold_check_no_button = QPushButton("Hunting / buzzing")
+        self._hold_check_no_button.setFocusPolicy(Qt.NoFocus)
+        self._hold_check_no_button.clicked.connect(lambda: self._on_hold_check_answer(False))
+        hold_answer_row.addWidget(self._hold_check_yes_button)
+        hold_answer_row.addWidget(self._hold_check_no_button)
+        layout.addLayout(hold_answer_row)
+        self._hold_check_answer_buttons = (self._hold_check_yes_button, self._hold_check_no_button)
+        self._set_hold_check_answer_buttons_visible(False)
 
         return box
 
@@ -332,13 +465,36 @@ class BenchTab(QWidget):
             if self._active_sweep is not None:
                 self._active_sweep = None
                 self._sweep_started_at = None
+            self._momentary_hold.cancel()
+            if self._repeatability.active:
+                self._repeatability.cancel()
+                self._finish_repeatability_ui()
+            self._set_repeatability_answer_buttons_visible(False)
+            if self._hold_check.active:
+                self._hold_check.cancel()
+                self._finish_hold_check_ui()
+            self._set_hold_check_answer_buttons_visible(False)
 
         self._arm_button.setEnabled(not armed)
         self._disarm_button.setEnabled(armed)
         self._set_controls_enabled(armed)
 
+        if armed and self._momentary_hold.observe(now):
+            self._send_pulse(NEUTRAL_PULSE_US)
+            self._momentary_hold_label.setText("")
+            self.log_message.emit(f"brief hold expired after {_MOMENTARY_HOLD_S:.0f}s, returned to 90 deg")
+        elif self._momentary_hold.pending:
+            remaining = self._momentary_hold.remaining_s(now)
+            self._momentary_hold_label.setText(f"returning to 90 deg in {remaining:0.0f}s")
+        else:
+            self._momentary_hold_label.setText("")
+
         if self._active_sweep is not None:
             self._drive_sweep(now)
+        elif self._repeatability.active:
+            self._drive_repeatability(now)
+        elif self._hold_check.active:
+            self._drive_hold_check(now)
         elif armed:
             self._check_dwell(now)
         else:
@@ -357,6 +513,15 @@ class BenchTab(QWidget):
             self._sweep_start_button.setEnabled(True)
             self._sweep_abort_button.setEnabled(False)
             self._set_manual_controls_enabled(True)
+        self._momentary_hold.cancel()
+        if self._repeatability.active:
+            self._repeatability.cancel()
+            self._finish_repeatability_ui()
+            self._set_repeatability_answer_buttons_visible(False)
+        if self._hold_check.active:
+            self._hold_check.cancel()
+            self._finish_hold_check_ui()
+            self._set_hold_check_answer_buttons_visible(False)
         if self._current_pulse != NEUTRAL_PULSE_US:
             self._send_pulse(NEUTRAL_PULSE_US)
             self.log_message.emit("emergency stop: bench parked at neutral")
@@ -391,6 +556,7 @@ class BenchTab(QWidget):
         )
 
     def _on_park_clicked(self) -> None:
+        self._cancel_all_guided_sequences()
         self._send_pulse(NEUTRAL_PULSE_US)
         self.log_message.emit("parked at neutral")
 
@@ -398,11 +564,48 @@ class BenchTab(QWidget):
         self._pulse_value_label.setText(f"{value}us")
         if self._active_sweep is not None:
             return  # sweep owns the pulse output while running
+        self._cancel_all_guided_sequences()
         self._send_pulse(value)
 
     def _nudge(self, delta: int) -> None:
+        self._cancel_all_guided_sequences()
         new_pulse = max(BENCH_PULSE_MIN_US, min(BENCH_PULSE_MAX_US, self._current_pulse + delta))
         self._send_pulse(new_pulse)
+
+    def _on_convenience_clicked(self, pulse_us: int) -> None:
+        self._cancel_all_guided_sequences()
+        self._send_pulse(pulse_us)
+        if pulse_us == NEUTRAL_PULSE_US:
+            self.log_message.emit("convenience position: 90 deg (holds)")
+        else:
+            self._momentary_hold.start(time.monotonic())
+            label = "0" if pulse_us == _CONVENIENCE_MIN_US else "180"
+            self.log_message.emit(f"convenience position: {label} deg (brief hold, {_MOMENTARY_HOLD_S:.0f}s)")
+
+    def _cancel_all_guided_sequences(self) -> None:
+        """Any explicit manual pulse action (park, slider, nudge, a
+        different convenience button, starting a different automated
+        sequence) interrupts whatever else was running -- only one thing
+        should ever be driving the pulse output automatically at a time,
+        and the operator just did something else, so a check still
+        counting down in the background would only be confusing. The
+        sequences' own internal steps call _send_pulse() directly, not
+        through these handlers, so they never cancel themselves."""
+        self._momentary_hold.cancel()
+        if self._repeatability.active:
+            self._repeatability.cancel()
+            self._finish_repeatability_ui()
+            self.log_message.emit("repeatability check cancelled")
+        if self._hold_check.active:
+            self._hold_check.cancel()
+            self._finish_hold_check_ui()
+            self.log_message.emit("hold check cancelled")
+        if self._active_sweep is not None:
+            self._active_sweep = None
+            self._sweep_started_at = None
+            self._sweep_start_button.setEnabled(True)
+            self._sweep_abort_button.setEnabled(False)
+            self.log_message.emit("sweep cancelled")
 
     def _send_pulse(self, pulse_us: int) -> None:
         board = self._board_combo.currentData()
@@ -433,6 +636,7 @@ class BenchTab(QWidget):
             self.log_message.emit(f"cannot start sweep: {exc}")
             return
 
+        self._cancel_all_guided_sequences()
         self._active_sweep = plan
         self._sweep_started_at = time.monotonic()
         self._dwell_guard.reset()
@@ -464,6 +668,118 @@ class BenchTab(QWidget):
             self.log_message.emit("sweep complete, parked at neutral")
             return
         self._send_pulse(self._active_sweep.pulse_at(elapsed))
+
+    # --- repeatability / hold checks -------------------------------------
+
+    _REPEATABILITY_TARGET_PULSE = {"neutral": NEUTRAL_PULSE_US, "zero": _CONVENIENCE_MIN_US}
+    _REPEATABILITY_TARGET_LABEL = {"neutral": "neutral (90 deg)", "zero": "0 deg"}
+
+    def _on_start_repeatability_clicked(self) -> None:
+        self._cancel_all_guided_sequences()
+        self._set_repeatability_answer_buttons_visible(False)
+        now = time.monotonic()
+        self._repeatability.start(now)
+        self._send_pulse(self._REPEATABILITY_TARGET_PULSE[self._repeatability.current_target])
+        self._repeatability_start_button.setEnabled(False)
+        self._repeatability_abort_button.setEnabled(True)
+        self._set_manual_controls_enabled(False)
+        self._repeatability_status_label.setText(
+            f"holding at {self._REPEATABILITY_TARGET_LABEL['neutral']} -- watch the leg"
+        )
+        self.log_message.emit("repeatability check started")
+
+    def _on_abort_repeatability_clicked(self) -> None:
+        if not self._repeatability.active:
+            return
+        self._repeatability.cancel()
+        self._finish_repeatability_ui()
+        self._send_pulse(NEUTRAL_PULSE_US)
+        self.log_message.emit("repeatability check aborted, parked at neutral")
+
+    def _drive_repeatability(self, now: float) -> None:
+        result = self._repeatability.tick(now)
+        if result is None:
+            return
+        if result == "done":
+            self._finish_repeatability_ui()
+            self._repeatability_status_label.setText("Did it return to the same point both times?")
+            self._set_repeatability_answer_buttons_visible(True)
+            self.log_message.emit("repeatability check sequence complete -- awaiting your judgment")
+            return
+        self._send_pulse(self._REPEATABILITY_TARGET_PULSE[result])
+        self._repeatability_status_label.setText(f"holding at {self._REPEATABILITY_TARGET_LABEL[result]} -- watch the leg")
+
+    def _finish_repeatability_ui(self) -> None:
+        self._repeatability_start_button.setEnabled(True)
+        self._repeatability_abort_button.setEnabled(False)
+        self._set_manual_controls_enabled(True)
+
+    def _on_repeatability_answer(self, same_point: bool) -> None:
+        servo_index = self._servo_combo.currentIndex()
+        verdict = "same point (OK)" if same_point else "DIFFERENT point (not repeatable)"
+        self.log_message.emit(f"repeatability check for servo {servo_index} ({SERVO_NAMES[servo_index]}): {verdict}")
+        if not same_point:
+            self._append_to_note(f"repeatability check failed: did not return to the same point")
+        self._repeatability_status_label.setText("")
+        self._set_repeatability_answer_buttons_visible(False)
+
+    def _set_repeatability_answer_buttons_visible(self, visible: bool) -> None:
+        for button in self._repeatability_answer_buttons:
+            button.setVisible(visible)
+
+    def _on_start_hold_check_clicked(self) -> None:
+        self._cancel_all_guided_sequences()
+        self._set_hold_check_answer_buttons_visible(False)
+        now = time.monotonic()
+        self._hold_check.start(now)
+        self._send_pulse(NEUTRAL_PULSE_US)
+        self._hold_check_start_button.setEnabled(False)
+        self._hold_check_abort_button.setEnabled(True)
+        self._set_manual_controls_enabled(False)
+        self.log_message.emit("hold check started: parked at neutral, listen for hunting/buzzing")
+
+    def _on_abort_hold_check_clicked(self) -> None:
+        if not self._hold_check.active:
+            return
+        self._hold_check.cancel()
+        self._finish_hold_check_ui()
+        self.log_message.emit("hold check aborted")
+
+    def _drive_hold_check(self, now: float) -> None:
+        remaining = self._hold_check.remaining_s(now)
+        if remaining is not None:
+            self._hold_check_status_label.setText(f"listening -- {remaining:0.0f}s remaining")
+        if self._hold_check.tick(now):
+            self._finish_hold_check_ui()
+            self._hold_check_status_label.setText("Was it silent, or hunting/buzzing?")
+            self._set_hold_check_answer_buttons_visible(True)
+            self.log_message.emit("hold check complete -- awaiting your judgment")
+
+    def _finish_hold_check_ui(self) -> None:
+        self._hold_check_start_button.setEnabled(True)
+        self._hold_check_abort_button.setEnabled(False)
+        self._set_manual_controls_enabled(True)
+
+    def _on_hold_check_answer(self, silent: bool) -> None:
+        servo_index = self._servo_combo.currentIndex()
+        verdict = "silent (OK)" if silent else "HUNTING/BUZZING (not holding cleanly)"
+        self.log_message.emit(f"hold check for servo {servo_index} ({SERVO_NAMES[servo_index]}): {verdict}")
+        if not silent:
+            self._append_to_note("hold check failed: hunting/buzzing at neutral")
+        self._hold_check_status_label.setText("")
+        self._set_hold_check_answer_buttons_visible(False)
+
+    def _set_hold_check_answer_buttons_visible(self, visible: bool) -> None:
+        for button in self._hold_check_answer_buttons:
+            button.setVisible(visible)
+
+    def _append_to_note(self, text: str) -> None:
+        """Populates the note field for the operator to review and save
+        themselves (Save note is never clicked automatically) -- doesn't
+        overwrite whatever's already there."""
+        existing = self._note_edit.text()
+        combined = f"{existing}; {text}" if existing else text
+        self._note_edit.setText(combined)
 
     # --- dwell / stall protection ---------------------------------------
 
@@ -532,13 +848,18 @@ class BenchTab(QWidget):
     def _set_controls_enabled(self, enabled: bool) -> None:
         self._park_button.setEnabled(enabled)
         self._set_manual_controls_enabled(enabled)
-        self._sweep_start_button.setEnabled(enabled and self._active_sweep is None)
+        anything_running = self._active_sweep is not None or self._repeatability.active or self._hold_check.active
+        self._sweep_start_button.setEnabled(enabled and not anything_running)
+        self._repeatability_start_button.setEnabled(enabled and not anything_running)
+        self._hold_check_start_button.setEnabled(enabled and not anything_running)
 
     def _set_manual_controls_enabled(self, enabled: bool) -> None:
         self._pulse_slider.setEnabled(enabled)
         for button in self._nudge_buttons:
             button.setEnabled(enabled)
         for button in self._mark_buttons:
+            button.setEnabled(enabled)
+        for button in self._convenience_buttons:
             button.setEnabled(enabled)
 
     def _send(self, command) -> Telemetry | None:

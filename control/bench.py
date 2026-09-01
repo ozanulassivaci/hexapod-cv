@@ -85,3 +85,130 @@ class SweepPlan:
 
     def is_complete(self, elapsed_s: float) -> bool:
         return elapsed_s >= self.duration_s
+
+
+class MomentaryHold:
+    """Tracks a deliberately brief hold at a convenience extreme (the
+    Bench Test tab's 0/180-equivalent buttons), auto-returning to
+    neutral after hold_s regardless of DwellGuard's own, longer,
+    away-from-neutral timeout -- these buttons drive toward an extreme
+    on purpose, so the short, unconditional window is what keeps a
+    clone servo that can't actually reach the nominal extreme from
+    being left fighting it."""
+
+    def __init__(self, hold_s: float = 2.0) -> None:
+        self.hold_s = hold_s
+        self._started_at: float | None = None
+
+    @property
+    def pending(self) -> bool:
+        return self._started_at is not None
+
+    def start(self, now: float) -> None:
+        self._started_at = now
+
+    def cancel(self) -> None:
+        self._started_at = None
+
+    def remaining_s(self, now: float) -> float | None:
+        if self._started_at is None:
+            return None
+        return max(0.0, self.hold_s - (now - self._started_at))
+
+    def observe(self, now: float) -> bool:
+        """Call every tick while pending. Returns True exactly once, the
+        moment the hold expires (and clears pending state) -- the
+        caller's cue to send the return-to-neutral pulse."""
+        if self._started_at is None:
+            return False
+        if now - self._started_at < self.hold_s:
+            return False
+        self._started_at = None
+        return True
+
+
+class RepeatabilityCheck:
+    """Drives neutral -> zero -> neutral (a convenience extreme, not the
+    servo's true 0), holding step_hold_s at each stop so the operator has
+    time to look. There is no position feedback anywhere in this system
+    (CLAUDE.md) -- "did it return to the same point" can only ever be a
+    human's own visual judgment; this class only paces a hands-free
+    sequence for them to watch, never decides the answer itself."""
+
+    STEPS = ("neutral", "zero", "neutral")
+
+    def __init__(self, step_hold_s: float = 2.0) -> None:
+        self.step_hold_s = step_hold_s
+        self._index: int | None = None
+        self._step_started_at: float | None = None
+
+    @property
+    def active(self) -> bool:
+        return self._index is not None
+
+    @property
+    def current_target(self) -> str | None:
+        return self.STEPS[self._index] if self.active else None
+
+    def start(self, now: float) -> None:
+        self._index = 0
+        self._step_started_at = now
+
+    def cancel(self) -> None:
+        self._index = None
+        self._step_started_at = None
+
+    def tick(self, now: float) -> str | None:
+        """Call every tick while active. Returns the new current_target
+        the instant the sequence advances to it (the caller's cue to
+        send that pulse), "done" once every step has held its full
+        duration, or None if nothing changed yet."""
+        if not self.active:
+            return None
+        if now - self._step_started_at < self.step_hold_s:
+            return None
+        self._index += 1
+        if self._index >= len(self.STEPS):
+            self._index = None
+            self._step_started_at = None
+            return "done"
+        self._step_started_at = now
+        return self.current_target
+
+
+class HoldCheck:
+    """Paces a park-and-listen wait (default 30s) so the operator can
+    check for hunting/buzzing -- a stalled or miscalibrated servo
+    audibly fights to hold position even when commanded to sit still.
+    Whether it did is the operator's own judgment; this only times the
+    wait, the same "never decides the answer" split as
+    RepeatabilityCheck."""
+
+    def __init__(self, hold_s: float = 30.0) -> None:
+        self.hold_s = hold_s
+        self._started_at: float | None = None
+
+    @property
+    def active(self) -> bool:
+        return self._started_at is not None
+
+    def start(self, now: float) -> None:
+        self._started_at = now
+
+    def cancel(self) -> None:
+        self._started_at = None
+
+    def remaining_s(self, now: float) -> float | None:
+        if self._started_at is None:
+            return None
+        return max(0.0, self.hold_s - (now - self._started_at))
+
+    def tick(self, now: float) -> bool:
+        """Call every tick while active. Returns True exactly once, the
+        moment the hold completes (and clears active state)."""
+        if self._started_at is None:
+            return False
+        if now - self._started_at < self.hold_s:
+            return False
+        self._started_at = None
+        return True

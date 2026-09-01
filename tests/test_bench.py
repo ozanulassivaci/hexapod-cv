@@ -1,6 +1,6 @@
 import pytest
 
-from control.bench import BenchSafetyConfig, DwellGuard, SweepPlan
+from control.bench import BenchSafetyConfig, DwellGuard, HoldCheck, MomentaryHold, RepeatabilityCheck, SweepPlan
 
 DEFAULT_CONFIG = BenchSafetyConfig(neutral_pulse_us=1500, dwell_timeout_s=8.0)
 
@@ -123,3 +123,121 @@ def test_sweep_is_complete():
 def test_invalid_sweep_plan_rejected(kwargs):
     with pytest.raises(ValueError):
         SweepPlan(**kwargs)
+
+
+# --- MomentaryHold -----------------------------------------------------------
+
+
+def test_momentary_hold_not_pending_until_started():
+    hold = MomentaryHold(hold_s=2.0)
+    assert hold.pending is False
+    assert hold.observe(now=0.0) is False
+
+
+def test_momentary_hold_observe_false_before_expiry():
+    hold = MomentaryHold(hold_s=2.0)
+    hold.start(now=0.0)
+    assert hold.observe(now=1.9) is False
+    assert hold.pending is True
+
+
+def test_momentary_hold_observe_true_exactly_once_at_expiry():
+    hold = MomentaryHold(hold_s=2.0)
+    hold.start(now=0.0)
+    assert hold.observe(now=2.0) is True
+    assert hold.pending is False
+    assert hold.observe(now=3.0) is False  # already cleared, not re-fired
+
+
+def test_momentary_hold_cancel_clears_pending():
+    hold = MomentaryHold(hold_s=2.0)
+    hold.start(now=0.0)
+    hold.cancel()
+    assert hold.pending is False
+    assert hold.observe(now=2.0) is False
+
+
+def test_momentary_hold_remaining_s():
+    hold = MomentaryHold(hold_s=2.0)
+    assert hold.remaining_s(now=0.0) is None
+    hold.start(now=0.0)
+    assert hold.remaining_s(now=0.5) == pytest.approx(1.5)
+    assert hold.remaining_s(now=10.0) == 0.0  # floors at zero, doesn't go negative
+
+
+# --- RepeatabilityCheck ------------------------------------------------------
+
+
+def test_repeatability_check_not_active_until_started():
+    check = RepeatabilityCheck(step_hold_s=2.0)
+    assert check.active is False
+    assert check.current_target is None
+    assert check.tick(now=100.0) is None
+
+
+def test_repeatability_check_starts_at_neutral():
+    check = RepeatabilityCheck(step_hold_s=2.0)
+    check.start(now=0.0)
+    assert check.active is True
+    assert check.current_target == "neutral"
+
+
+def test_repeatability_check_advances_through_full_sequence():
+    check = RepeatabilityCheck(step_hold_s=2.0)
+    check.start(now=0.0)
+    assert check.tick(now=1.0) is None  # still holding at neutral
+    assert check.tick(now=2.0) == "zero"
+    assert check.current_target == "zero"
+    assert check.tick(now=3.0) is None  # still holding at zero
+    assert check.tick(now=4.0) == "neutral"
+    assert check.tick(now=5.0) is None
+    assert check.tick(now=6.0) == "done"
+    assert check.active is False
+
+
+def test_repeatability_check_cancel_stops_the_sequence():
+    check = RepeatabilityCheck(step_hold_s=2.0)
+    check.start(now=0.0)
+    check.cancel()
+    assert check.active is False
+    assert check.tick(now=100.0) is None
+
+
+# --- HoldCheck -----------------------------------------------------------
+
+
+def test_hold_check_not_active_until_started():
+    check = HoldCheck(hold_s=30.0)
+    assert check.active is False
+    assert check.tick(now=0.0) is False
+
+
+def test_hold_check_tick_false_before_expiry():
+    check = HoldCheck(hold_s=30.0)
+    check.start(now=0.0)
+    assert check.tick(now=29.9) is False
+    assert check.active is True
+
+
+def test_hold_check_tick_true_exactly_once_at_expiry():
+    check = HoldCheck(hold_s=30.0)
+    check.start(now=0.0)
+    assert check.tick(now=30.0) is True
+    assert check.active is False
+    assert check.tick(now=31.0) is False  # already cleared
+
+
+def test_hold_check_cancel_stops_the_wait():
+    check = HoldCheck(hold_s=30.0)
+    check.start(now=0.0)
+    check.cancel()
+    assert check.active is False
+    assert check.tick(now=30.0) is False
+
+
+def test_hold_check_remaining_s():
+    check = HoldCheck(hold_s=30.0)
+    assert check.remaining_s(now=0.0) is None
+    check.start(now=0.0)
+    assert check.remaining_s(now=10.0) == pytest.approx(20.0)
+    assert check.remaining_s(now=1000.0) == 0.0
