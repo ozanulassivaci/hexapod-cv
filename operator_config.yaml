@@ -14,10 +14,11 @@ detection:
   min_contour_area: 500
   label: blue_object
 
-# mode: mock | udp. mock needs nothing else and is the primary path while
-# no hardware exists -- see udp below for when real hardware shows up.
+# mode: mock | sim | udp. udp is the default now that the test leg is on
+# the bench and reachable at the address below -- pass --link-mode mock
+# (or sim) for a hardware-free session instead of editing this file.
 link:
-  mode: mock
+  mode: udp
   udp:
     robot_host: "192.168.0.50"
     robot_port: 9000

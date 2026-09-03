@@ -1,16 +1,18 @@
 """Operator GUI entry point.
 
     python app.py
-    python app.py --link-mode sim
+    python app.py --link-mode mock
     python app.py --camera-mode synthetic   # closes vision -> tracker -> gait end to end, no hardware
 
 Wires a camera stream, HSVDetector, a RobotLink, and the Tracker together
-and launches MainWindow. Defaults to MockRobotLink (operator_config.yaml's
-link.mode) -- no hardware and no camera required to run; both degrade to
-a visible "disconnected"/"waiting for camera" state rather than an error.
---link-mode overrides link.mode from the config file for the session,
-without editing the YAML -- selectable from config or CLI, per the design
-discussion this was built from.
+and launches MainWindow. Link mode comes from operator_config.yaml's
+link.mode -- the shipped config defaults to "udp" (real hardware, at that
+file's configured address) now that a robot exists to bring up; pass
+--link-mode mock for a hardware-free session (no hardware and no camera
+required to run; both degrade to a visible "disconnected"/"waiting for
+camera" state rather than an error). --link-mode overrides link.mode from
+the config file for the session, without editing the YAML -- selectable
+from config or CLI, per the design discussion this was built from.
 
 --camera-mode synthetic swaps MJPEGStream for SyntheticCameraStream (see
 simulator/synthetic_camera.py), which renders a target whose apparent

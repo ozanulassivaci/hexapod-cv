@@ -11,12 +11,16 @@ python app.py
 
 It works with no camera and no robot connected. That's normal, not broken.
 
-By default the app talks to `MockRobotLink` — a fake robot that
-acknowledges everything instantly but never actually moves or walks over
-time. Run `python app.py --link-mode sim` instead (or set `link.mode:
-sim` in `operator_config.yaml`) to drive the software simulator, which
-does run gait over time and shows it in a fourth **Simulator** tab — see
-below. Neither mode needs a camera, real servos, or an ESP32.
+`operator_config.yaml`'s `link.mode` picks which robot the app talks to,
+and the shipped file defaults to `udp` — real hardware, at the address in
+that same file — now that a robot exists to bring up. For hardware-free
+work, override it for one run with `python app.py --link-mode mock` (a
+fake robot that acknowledges everything instantly but never actually
+moves or walks over time) or `python app.py --link-mode sim` (the
+software simulator, which does run gait over time and shows it in a
+fourth **Simulator** tab — see below). Neither mode needs a camera, real
+servos, or an ESP32. `--link-mode` always overrides the config file for
+that run without editing it.
 
 `python app.py --camera-mode synthetic` goes one step further and
 replaces the real camera too, with a rendered target that reacts to the
@@ -116,9 +120,9 @@ overnight. You'll re-arm it often; that's expected, not a nuisance.
 correction (offset, safe limits, your notes) lives in the *robot's* memory,
 not your laptop's. The app is a window into that data: it can read it, show
 it to you, change it, or save a backup copy to a file on your computer
-(export). If you're running against `MockRobotLink` (the default, no
-hardware needed), that data lives only in the app's memory for as long as
-the app stays open — **closing the app throws it away**. There is no
+(export). If you're running against `MockRobotLink` (`--link-mode mock`,
+no hardware needed), that data lives only in the app's memory for as long
+as the app stays open — **closing the app throws it away**. There is no
 autosave. Export before you close, every time, if the session mattered.
 
 ## Operate tab, control by control
