@@ -72,6 +72,13 @@ static bool havePcAddr = false;
 // output -- "udp log off" over serial silences it without a reflash.
 static bool udpLogEnabled = true;
 
+// Packets that arrived but failed decodeCommand(). Cumulative since boot,
+// reported in telemetry beside the watchdog's own stale-drop counter --
+// the two together answer "are packets reaching me at all, and if so what
+// am I doing with them" without a serial cable. See docs/protocol.md
+// Section 4.
+static uint32_t malformedDropCount = 0;
+
 static MotionState lastMotion;
 static bool hasMotion = false;
 static uint32_t faultFlags = 0;
@@ -447,6 +454,12 @@ static void buildBaseTelemetry(Telemetry& t) {
     t.ikClipWorstMm = gaitEngine.state().ikClipWorstMm;
     t.jointClipCount = gaitEngine.state().jointClipCount;
     t.jointClipWorstDeg = gaitEngine.state().jointClipWorstDeg;
+    t.staleDropCount = linkWatchdog.staleDropCount();
+    t.malformedDropCount = malformedDropCount;
+    // Null until a packet has actually been accepted -- 0 is a real
+    // sequence number and can't double as "nothing yet".
+    t.hasLastAcceptedSeq = linkWatchdog.hasEverReceivedPacket();
+    t.lastAcceptedSeq = linkWatchdog.lastAcceptedSeq();
 }
 
 // --- UDP -----------------------------------------------------------------
@@ -508,6 +521,7 @@ static void processUdp() {
 
         DecodeResult decoded = decodeCommand(buf, static_cast<size_t>(len));
         if (!decoded.ok) {
+            ++malformedDropCount;
             // Malformed packet dropped without crashing, no reply --
             // nothing valid to echo a seq for. Logged with the decoder's
             // own reason: from the PC this is otherwise identical to the
@@ -520,8 +534,10 @@ static void processUdp() {
             continue;
         }
 
-        bool fresh = linkWatchdog.observePacket(decoded.command.seq, millis() / 1000.0f);
-        if (!fresh) {
+        float nowS = millis() / 1000.0f;
+        float silentForS = linkWatchdog.secondsSinceLastPacket(nowS);  // before observePacket updates it
+        Observation obs = linkWatchdog.observePacket(decoded.command.seq, nowS);
+        if (obs == Observation::Stale) {
             // Stale/duplicate, latest-wins -- silently dropped, not an
             // error. Logged with both sequence numbers because that pair
             // is the only thing that distinguishes "reordered packet" from
@@ -535,11 +551,24 @@ static void processUdp() {
                 Serial.print(" seq=");
                 Serial.print(decoded.command.seq);
                 Serial.print(" lastAccepted=");
-                Serial.println(linkWatchdog.lastAcceptedSeq());
+                Serial.print(linkWatchdog.lastAcceptedSeq());
+                Serial.print(" staleDrops=");
+                Serial.println(linkWatchdog.staleDropCount());
             }
             continue;
         }
         faultFlags &= ~FAULT_LINK_TIMEOUT_BIT;
+
+        if (obs == Observation::NewSession) {
+            // Always logged, independent of udpLogEnabled: this is a
+            // state change (a different PC session took over, or the same
+            // one restarted), not per-packet noise, and it is exactly
+            // what silently not happening used to cost an evening.
+            Serial.print("udp: new session after ");
+            Serial.print(static_cast<long>(silentForS * 1000.0f));
+            Serial.print("ms silence, baselining at seq=");
+            Serial.println(decoded.command.seq);
+        }
 
         if (udpLogEnabled) {
             logRxPrefix(from, fromPort, len);

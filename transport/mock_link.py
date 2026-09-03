@@ -23,6 +23,7 @@ from transport.generated_constants import (
     SEQUENCE_MODULUS,
 )
 from transport.link import RobotLink
+from transport.link_watchdog import LinkWatchdog, Observation
 from transport.protocol import (
     BenchHealthNoteCommand,
     BenchModeCommand,
@@ -100,6 +101,12 @@ class MockRobotLink(RobotLink):
         self._calibration_armed_until: float | None = None
         self._bench_armed_until: float | None = None
         self._closed = False
+        # The modelled robot's *receive* side. Previously absent
+        # entirely: this mock accepted every packet unconditionally,
+        # which is why a firmware bug in exactly this rule (a restarted
+        # PC counter being rejected forever) was invisible to every test
+        # and every mock-mode session. See transport/link_watchdog.py.
+        self._watchdog = LinkWatchdog(timeout_s=connection_timeout_s)
 
         # Seed telemetry so latest_telemetry()/is_connected work before the
         # first send() -- a mock "robot" is always on until told otherwise.
@@ -127,11 +134,30 @@ class MockRobotLink(RobotLink):
         if self.console_log:
             print(f"[MockRobotLink] seq={seq} {command!r}")
 
+        # The modelled robot's receive path, in the same order firmware
+        # runs it: freshness first, command handling only if accepted,
+        # and no telemetry at all for a rejected packet -- a dropped
+        # packet produces no reply on the wire, so it must produce no
+        # proof of life here either, or is_connected would lie.
+        if self._watchdog.observe_packet(seq, time.monotonic()) is Observation.STALE:
+            if self.console_log:
+                print(f"[MockRobotLink] seq={seq} DROPPED stale (lastAccepted={self._watchdog.last_accepted_seq})")
+            return seq
+
         ok, error, profiles_reply = self._apply(command)
         self._record_local_telemetry(
             self._make_telemetry(seq_echo=seq, ok=ok, error=error, profiles=profiles_reply)
         )
         return seq
+
+    def simulate_client_restart(self) -> None:
+        """Reset only this link's outbound sequence counter, leaving the
+        modelled robot's receive state intact -- exactly what happens
+        when the GUI is restarted without power-cycling the robot, which
+        is the situation that produced a permanently red LINK light and
+        no log line anywhere. Present so that case is reachable in a
+        test; nothing in normal operation calls it."""
+        self._seq = 0
 
     def set_fault(self, fault_flags: int) -> None:
         """Inject a fault flag into the next-reported telemetry, to test how
@@ -304,4 +330,9 @@ class MockRobotLink(RobotLink):
             # answer for a link that never runs gait.
             last_applied=self._last_motion_command,
             profiles=profiles,
+            stale_drop_count=self._watchdog.stale_drop_count,
+            # No wire, so nothing can arrive malformed -- 0 is the true
+            # and complete answer here, not a placeholder.
+            malformed_drop_count=0,
+            last_accepted_seq=self._watchdog.last_accepted_seq,
         )

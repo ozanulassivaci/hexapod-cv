@@ -4,14 +4,23 @@
 
 LinkWatchdog::LinkWatchdog(float timeoutS) : timeoutS_(timeoutS) {}
 
-bool LinkWatchdog::observePacket(uint32_t seq, float nowS) {
-    if (hasReceived_ && !sequenceIsNewer(seq, lastSeq_)) {
-        return false;
+Observation LinkWatchdog::observePacket(uint32_t seq, float nowS) {
+    Observation result = Observation::Accepted;
+    if (hasReceived_) {
+        // hasTimedOut() itself, not a re-derived comparison, so "the
+        // watchdog considers the link down" and "the next packet
+        // re-baselines" cannot drift apart.
+        if (hasTimedOut(nowS)) {
+            result = Observation::NewSession;
+        } else if (!sequenceIsNewer(seq, lastSeq_)) {
+            ++staleDropCount_;
+            return Observation::Stale;
+        }
     }
     lastSeq_ = seq;
     lastSeenAtS_ = nowS;
     hasReceived_ = true;
-    return true;
+    return result;
 }
 
 bool LinkWatchdog::hasTimedOut(float nowS) const {

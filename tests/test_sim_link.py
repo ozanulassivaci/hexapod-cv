@@ -271,3 +271,47 @@ def test_turn_command_rotates_body():
     time.sleep(_SETTLE_S)
     assert link.snapshot().heading_deg != 0.0
     link.close()
+
+
+def test_sim_link_drops_stale_sequences_like_firmware():
+    """SimRobotLink wraps MockRobotLink, so it inherits the receive-side
+    freshness rule -- but it records its own telemetry afterwards, and
+    must not hand back the *previous* reply as fresh proof of life for a
+    packet the modelled robot actually dropped."""
+    # heartbeat off: it would keep sending on its own and move the very
+    # sequence state this is inspecting.
+    link = SimRobotLink(connection_timeout_s=0.3, heartbeat_interval_s=None)
+    try:
+        for _ in range(5):
+            link.send(PingCommand())
+        accepted = link.latest_telemetry().seq_echo
+
+        link.simulate_client_restart()
+        link.send(PingCommand())  # stale -- dropped, no reply
+
+        # The stored telemetry is still the last *accepted* one. A drop
+        # produces no reply, so the PC cannot learn the new drop count
+        # until something is accepted again -- exactly as on real
+        # hardware, which is why the count is read after the recovery
+        # below rather than here.
+        assert link.latest_telemetry().seq_echo == accepted
+
+        time.sleep(0.35)
+        link.send(PingCommand())  # past the timeout -- re-baselines
+        assert link.latest_telemetry().stale_drop_count == 1
+    finally:
+        link.close()
+
+
+def test_sim_link_rebaselines_after_silence():
+    link = SimRobotLink(connection_timeout_s=0.15, heartbeat_interval_s=None)
+    try:
+        for _ in range(5):
+            link.send(PingCommand())
+        link.simulate_client_restart()
+        time.sleep(0.2)
+        seq = link.send(PingCommand())
+        assert link.latest_telemetry().seq_echo == seq
+        assert link.is_connected is True
+    finally:
+        link.close()

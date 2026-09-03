@@ -76,7 +76,11 @@ class SimRobotLink(RobotLink):
         tick_hz: float = _DEFAULT_TICK_HZ,
     ) -> None:
         super().__init__(connection_timeout_s=connection_timeout_s)
-        self._mock = MockRobotLink()
+        # Same timeout, not the default: the wrapped mock owns the
+        # receive-side watchdog now, and its re-baseline window has to be
+        # the same window this link reports and times out against, or the
+        # two disagree about whether the link is up.
+        self._mock = MockRobotLink(connection_timeout_s=connection_timeout_s)
         self.state = RobotState()
 
         self._gait_lock = threading.Lock()
@@ -125,9 +129,23 @@ class SimRobotLink(RobotLink):
             # PanTilt/Face/calibration/bench commands don't touch any gait axis.
 
         seq = self._mock.send(command)
-        if not dropped:
-            self._record_local_telemetry(self._augment(self._mock.latest_telemetry()))
+        # The wrapped mock now models the robot's receive-side sequence
+        # freshness (transport/link_watchdog.py) and answers nothing at
+        # all for a packet it rejects as stale. Detect that by asking
+        # whether the reply actually echoes the sequence we just sent --
+        # recording telemetry anyway would hand back the *previous*
+        # reply as fresh proof of life, which is exactly the lie that
+        # made this class of bug invisible on the PC side.
+        replied = self._mock.latest_telemetry()
+        stale_dropped = replied is None or replied.seq_echo != seq
+        if not dropped and not stale_dropped:
+            self._record_local_telemetry(self._augment(replied))
         return seq
+
+    def simulate_client_restart(self) -> None:
+        """Reset only the outbound sequence counter, leaving the modelled
+        robot's receive state intact -- see MockRobotLink's own copy."""
+        self._mock.simulate_client_restart()
 
     def close(self) -> None:
         self._closed = True

@@ -502,3 +502,87 @@ def test_send_and_wait_convenience():
     assert telemetry is not None
     assert telemetry.ok is True
     assert telemetry.calibration_armed is True
+
+
+# --- receive-side sequence freshness -------------------------------------
+#
+# Every test below fails against the pre-fix mock, which accepted every
+# packet unconditionally and modelled no freshness rule at all. That gap
+# is why a firmware bug in exactly this rule reached real hardware
+# without a single test noticing -- see transport/link_watchdog.py.
+
+
+def test_stale_sequence_gets_no_telemetry_reply():
+    link = MockRobotLink()
+    link.send(WalkCommand(vx=1.0, vy=0.0, speed=50.0))
+    link.send(WalkCommand(vx=1.0, vy=0.0, speed=50.0))
+    accepted = link.latest_telemetry().seq_echo
+
+    # The GUI restarted; the modelled robot did not.
+    link.simulate_client_restart()
+    link.send(PingCommand())
+
+    # No reply at all for a dropped packet -- the previous telemetry is
+    # still the newest thing that exists, unchanged.
+    assert link.latest_telemetry().seq_echo == accepted
+
+
+def test_stale_sequence_is_counted_and_reported_in_telemetry():
+    link = MockRobotLink(connection_timeout_s=0.15)
+    for _ in range(5):
+        link.send(PingCommand())  # baseline climbs to seq 4
+
+    link.simulate_client_restart()
+    link.send(PingCommand())  # seq 0 -- stale
+    link.send(PingCommand())  # seq 1 -- still stale
+
+    # Neither drop replied, so the count can only be read once something
+    # is accepted again. Going quiet past the timeout is what does that,
+    # and is exactly how it plays out on real hardware.
+    time.sleep(0.2)
+    link.send(PingCommand())
+    telemetry = link.latest_telemetry()
+    assert telemetry.stale_drop_count == 2
+    assert telemetry.malformed_drop_count == 0  # no wire here, nothing can arrive malformed
+
+
+def test_dropped_packets_do_not_keep_the_link_looking_connected():
+    # The real failure mode: packets keep leaving the PC, none are
+    # answered, and is_connected must go false rather than being propped
+    # up by sends that were silently discarded.
+    link = MockRobotLink(connection_timeout_s=0.3)
+    for _ in range(5):
+        link.send(PingCommand())
+    assert link.is_connected is True
+
+    link.simulate_client_restart()
+    time.sleep(0.25)  # still inside the window -- the next send is stale, not a re-baseline
+    link.send(PingCommand())
+
+    # 0.2s later, only 0.2s has passed since that stale send, but 0.45s
+    # since the last *accepted* one. If a dropped packet had refreshed
+    # liveness the way an accepted one does, this would still read as
+    # connected -- which is precisely the lie that let a link nobody was
+    # answering keep looking alive.
+    time.sleep(0.2)
+    assert link.is_connected is False
+
+
+def test_new_session_is_accepted_after_the_link_goes_quiet():
+    link = MockRobotLink(connection_timeout_s=0.15)
+    for _ in range(5):
+        link.send(PingCommand())
+
+    link.simulate_client_restart()
+    time.sleep(0.2)  # past the timeout -- the robot is already in safe state
+    seq = link.send(PingCommand())
+
+    assert link.latest_telemetry().seq_echo == seq
+    assert link.is_connected is True
+    assert link.latest_telemetry().stale_drop_count == 0
+
+
+def test_last_accepted_seq_is_reported():
+    link = MockRobotLink()
+    seq = link.send(PingCommand())
+    assert link.latest_telemetry().last_accepted_seq == seq
