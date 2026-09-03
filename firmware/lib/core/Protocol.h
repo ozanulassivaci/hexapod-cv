@@ -127,6 +127,15 @@ struct Telemetry {
     float ikClipWorstMm = 0.0f;
     uint32_t jointClipCount = 0;
     float jointClipWorstDeg = 0.0f;
+    // Inbound-packet accounting, cumulative since boot -- docs/protocol.md
+    // Section 4. staleDropCount comes from LinkWatchdog (rejected by the
+    // freshness rule), malformedDropCount from main.cpp (failed to decode
+    // at all). lastAcceptedSeq is null until the first accepted packet;
+    // 0 is a real sequence number and can't mean "nothing yet".
+    uint32_t staleDropCount = 0;
+    uint32_t malformedDropCount = 0;
+    bool hasLastAcceptedSeq = false;
+    uint32_t lastAcceptedSeq = 0;
     bool hasLastApplied = false;
     MotionState lastApplied;
     bool hasProfiles = false;

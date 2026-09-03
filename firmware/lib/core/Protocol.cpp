@@ -449,6 +449,13 @@ size_t encodeTelemetry(const Telemetry& t, uint8_t* outBuf, size_t outBufLen) {
     doc["ik_clip_worst_mm"] = t.ikClipWorstMm;
     doc["joint_clip_count"] = t.jointClipCount;
     doc["joint_clip_worst_deg"] = t.jointClipWorstDeg;
+    doc["stale_drop_count"] = t.staleDropCount;
+    doc["malformed_drop_count"] = t.malformedDropCount;
+    if (t.hasLastAcceptedSeq) {
+        doc["last_accepted_seq"] = t.lastAcceptedSeq;
+    } else {
+        doc["last_accepted_seq"] = nullptr;
+    }
 
     if (t.hasLastApplied) {
         JsonObject la = doc["last_applied"].to<JsonObject>();

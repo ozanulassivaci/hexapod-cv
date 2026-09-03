@@ -839,6 +839,23 @@ class Telemetry:
     ik_clip_worst_mm: float = 0.0
     joint_clip_count: int = 0
     joint_clip_worst_deg: float = 0.0
+    # Inbound-packet accounting, cumulative since the robot booted --
+    # docs/protocol.md Section 4. stale_drop_count counts packets
+    # rejected by the receiver's sequence-freshness rule;
+    # malformed_drop_count counts packets that failed to decode at all.
+    # Together they answer "are my packets arriving, and if so what is
+    # the robot doing with them" -- the question a red LINK light alone
+    # cannot answer, and which previously needed a serial cable and a
+    # firmware source read. Always 0 from MockRobotLink/SimRobotLink for
+    # malformed_drop_count specifically: there is no wire to malform.
+    stale_drop_count: int = 0
+    malformed_drop_count: int = 0
+    # The sequence number the receiver will compare the next packet
+    # against. None until it has accepted one -- 0 is a real sequence
+    # number and can't double as "nothing yet". A value far above what
+    # this process is currently sending means the robot is rejecting
+    # everything as stale (see transport/link_watchdog.py).
+    last_accepted_seq: int | None = None
 
 
 def encode_telemetry(telemetry: Telemetry) -> bytes:
@@ -858,6 +875,9 @@ def encode_telemetry(telemetry: Telemetry) -> bytes:
         "ik_clip_worst_mm": telemetry.ik_clip_worst_mm,
         "joint_clip_count": telemetry.joint_clip_count,
         "joint_clip_worst_deg": telemetry.joint_clip_worst_deg,
+        "stale_drop_count": telemetry.stale_drop_count,
+        "malformed_drop_count": telemetry.malformed_drop_count,
+        "last_accepted_seq": telemetry.last_accepted_seq,
         "last_applied": (
             {"type": telemetry.last_applied.TYPE.value, **telemetry.last_applied._wire_fields()}
             if telemetry.last_applied is not None
@@ -886,6 +906,8 @@ def decode_telemetry(data: bytes) -> Telemetry:
         ik_clip_worst_mm = payload["ik_clip_worst_mm"]
         joint_clip_count = payload["joint_clip_count"]
         joint_clip_worst_deg = payload["joint_clip_worst_deg"]
+        stale_drop_count = payload["stale_drop_count"]
+        malformed_drop_count = payload["malformed_drop_count"]
     except KeyError as exc:
         raise ProtocolError(f"telemetry missing field {exc}") from None
 
@@ -913,6 +935,14 @@ def decode_telemetry(data: bytes) -> Telemetry:
         or joint_clip_worst_deg < 0
     ):
         raise ProtocolError(f"invalid joint_clip_worst_deg: {joint_clip_worst_deg!r}")
+
+    for name, value in (("stale_drop_count", stale_drop_count), ("malformed_drop_count", malformed_drop_count)):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ProtocolError(f"invalid {name}: {value!r}")
+
+    last_accepted_seq = payload.get("last_accepted_seq")
+    if last_accepted_seq is not None:
+        last_accepted_seq = _require_seq(last_accepted_seq)
 
     error = payload.get("error")
     if error is not None and not isinstance(error, str):
@@ -956,6 +986,9 @@ def decode_telemetry(data: bytes) -> Telemetry:
         ik_clip_worst_mm=float(ik_clip_worst_mm),
         joint_clip_count=joint_clip_count,
         joint_clip_worst_deg=float(joint_clip_worst_deg),
+        stale_drop_count=stale_drop_count,
+        malformed_drop_count=malformed_drop_count,
+        last_accepted_seq=last_accepted_seq,
         last_applied=last_applied,
         profiles=profiles,
     )

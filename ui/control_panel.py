@@ -129,6 +129,16 @@ class ControlPanel(QWidget):
         # diagnostic detail behind it.
         self._ik_clip_label = QLabel("IK clip: 0 (worst 0.0mm)")
         self._joint_clip_label = QLabel("joint clip: 0 (worst 0.0°)")
+        # Inbound-packet accounting from the robot (docs/protocol.md
+        # Section 4), also cumulative since *its* boot rather than since
+        # this GUI connected. This line is the one that distinguishes
+        # "my packets never arrive" from "they arrive and the robot
+        # throws them away" -- without it that difference needs a serial
+        # cable, which is what it previously cost. Climbing drops while
+        # LINK is red is the signature of a rejected sequence stream; see
+        # transport/link_watchdog.py.
+        self._drops_label = QLabel("drops: 0 stale, 0 malformed")
+        self._last_seq_label = QLabel("robot last accepted seq: n/a")
         for label in (
             self._rtt_label,
             self._last_applied_label,
@@ -136,6 +146,8 @@ class ControlPanel(QWidget):
             self._fault_flags_label,
             self._ik_clip_label,
             self._joint_clip_label,
+            self._drops_label,
+            self._last_seq_label,
         ):
             label.setFocusPolicy(Qt.NoFocus)
             layout.addWidget(label)
@@ -262,6 +274,8 @@ class ControlPanel(QWidget):
             self._fault_flags_label.setText("faults: n/a")
             self._ik_clip_label.setText("IK clip: n/a")
             self._joint_clip_label.setText("joint clip: n/a")
+            self._drops_label.setText("drops: n/a")
+            self._last_seq_label.setText("robot last accepted seq: n/a")
             self.set_safety_mode(None)
             return
 
@@ -277,6 +291,14 @@ class ControlPanel(QWidget):
         )
         self._joint_clip_label.setText(
             f"joint clip: {telemetry.joint_clip_count} (worst {telemetry.joint_clip_worst_deg:.1f}°)"
+        )
+        self._drops_label.setText(
+            f"drops: {telemetry.stale_drop_count} stale, {telemetry.malformed_drop_count} malformed"
+        )
+        last_seq = telemetry.last_accepted_seq
+        self._last_seq_label.setText(
+            f"robot last accepted seq: {last_seq}" if last_seq is not None
+            else "robot last accepted seq: none yet"
         )
         self.set_safety_mode(telemetry.robot_assembled)
 

@@ -59,6 +59,10 @@ _PING_TIMEOUT_S = 2.0  # per-probe wait in step 4 -- generous on purpose, see ma
 _PROBE_TIMEOUT_S = 1.5
 _PING_ATTEMPTS = 10
 _ICMP_PING_COUNT = 5
+# Step 3 deliberately sends this many non-protocol packets, which the robot
+# correctly counts as malformed. Subtracted before step 4 warns about the
+# malformed counter, so the tool doesn't raise an alarm about its own probe.
+_GARBAGE_PROBES_PER_RUN = 2
 
 # A healthy LAN round trip is roughly 1-10ms. These thresholds are
 # deliberately well above normal jitter before warning, and set high
@@ -241,6 +245,7 @@ def probe_udp_port(host: str, robot_port: int, listen_port: int) -> bool | None:
         time.sleep(0.3)
         # A second send is often what surfaces a pending ICMP error on
         # Linux -- the first send can succeed even against a closed port.
+        # Keep _GARBAGE_PROBES_PER_RUN in step with the count here.
         sock.send(b"link_doctor_probe_2")
         sock.recv(4096)
         _warn("got a reply to a garbage (non-protocol) packet -- unusual, but not a failure by itself")
@@ -366,6 +371,24 @@ def check_ping(host: str, robot_port: int, listen_port: int, attempts: int = _PI
     _info(f"link_timeout_s={t.link_timeout_s}  robot_assembled={t.robot_assembled}")
     _info(f"calibration_armed={t.calibration_armed}  bench_armed={t.bench_armed}")
     _info(f"ik_clip_count={t.ik_clip_count}  joint_clip_count={t.joint_clip_count}")
+    _info(
+        f"stale_drops={t.stale_drop_count}  malformed_drops={t.malformed_drop_count}  "
+        f"robot_last_accepted_seq={t.last_accepted_seq}"
+    )
+    if t.stale_drop_count > 0:
+        _warn(
+            f"the robot has rejected {t.stale_drop_count} packet(s) as out-of-order since it booted "
+            "(docs/protocol.md Section 4). Cumulative since ITS boot, so a nonzero count here is not "
+            "necessarily from this run -- but a count that climbs while nothing gets through means "
+            "packets are arriving and being discarded, not failing to arrive."
+        )
+    if t.malformed_drop_count > _GARBAGE_PROBES_PER_RUN:
+        _warn(
+            f"the robot could not decode {t.malformed_drop_count} packet(s) at all since it booted "
+            f"-- of which {_GARBAGE_PROBES_PER_RUN} are this tool's own step-3 probe, per run of it. "
+            "A count well above that almost always means the PC and the firmware were built from "
+            "different protocol versions -- reflash before chasing anything else."
+        )
     return PingResult(last_telemetry, successes, attempts, rtt_min, rtt_avg, rtt_max)
 
 

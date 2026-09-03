@@ -147,7 +147,7 @@ autosave. Export before you close, every time, if the session mattered.
   cosmetic — don't ignore it. If you see it, stop and figure out why before
   relying on the failsafe.
 - **Telemetry readout (RTT, last applied, gait phase, faults, IK clip,
-  joint clip).** Your diagnostic panel. If the robot "isn't doing
+  joint clip, drops, last accepted seq).** Your diagnostic panel. If the robot "isn't doing
   anything," this is where you look first: is the link even up (RTT),
   did the robot receive what you think you sent (last applied), is it
   stuck in a fault state (faults).
@@ -167,6 +167,24 @@ autosave. Export before you close, every time, if the session mattered.
     connected can leave a nonzero count showing with the `IK_CLIP` fault
     itself no longer active; the faults line is the "right now" signal,
     these two are the "how much/how bad so far" detail behind it.
+  - **drops** and **robot last accepted seq** answer a question the LINK
+    light on its own cannot: when nothing is getting through, are your
+    packets not arriving, or arriving and being thrown away? Both come
+    from the robot and count since *its* boot, not since this window
+    opened.
+    - `stale` drops climbing while LINK is red means packets are
+      arriving fine and the robot is rejecting them as out-of-order.
+      That normally resolves itself: leave the app alone for a couple of
+      seconds and the robot re-baselines onto your sequence numbers (see
+      `docs/protocol.md` §4). If it doesn't, restart the app rather than
+      the robot — a stale count that keeps climbing means something is
+      still sending on the old numbering.
+    - `malformed` drops climbing means packets arrive but the robot
+      can't parse them at all, which almost always means the PC and the
+      firmware were built from different protocol versions. Reflash.
+    - **robot last accepted seq** far above what a freshly-started app
+      would be sending is the same story from the other side. `none yet`
+      means the robot has not accepted a single packet since it booted.
 - **WASD / arrow keys.** Walk. Holding a key keeps walking; releasing it
   stops. Two keys at once (like W+D) walks diagonally. Get it wrong and the
   robot walks the wrong direction — release the key, it stops immediately.
