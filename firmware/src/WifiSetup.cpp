@@ -7,6 +7,33 @@
 #include "Config.h"
 #include "secrets.h"
 
+namespace {
+
+// Reads the power-save mode back out of the driver rather than trusting
+// that the set call above took effect -- "I called esp_wifi_set_ps()" and
+// "the radio is actually staying awake" are different claims, and only
+// the second one explains link latency. WIFI_PS_NONE is the only one of
+// these that keeps the radio up between packets.
+void reportPowerSave() {
+    wifi_ps_type_t ps = WIFI_PS_NONE;
+    esp_err_t err = esp_wifi_get_ps(&ps);
+    Serial.print("WiFi: power save = ");
+    if (err != ESP_OK) {
+        Serial.print("unreadable (esp_wifi_get_ps err 0x");
+        Serial.print(err, HEX);
+        Serial.println(")");
+        return;
+    }
+    switch (ps) {
+        case WIFI_PS_NONE: Serial.println("NONE (radio stays awake -- expected)"); break;
+        case WIFI_PS_MIN_MODEM: Serial.println("MIN_MODEM -- modem sleep is ON, expect high link latency"); break;
+        case WIFI_PS_MAX_MODEM: Serial.println("MAX_MODEM -- modem sleep is ON, expect high link latency"); break;
+        default: Serial.println("unknown"); break;
+    }
+}
+
+}  // namespace
+
 void WifiSetup::begin() {
     startStation();
 }
@@ -35,6 +62,7 @@ void WifiSetup::startStation() {
         esp_wifi_set_ps(WIFI_PS_NONE);
         Serial.print("WiFi: connected, IP ");
         Serial.println(WiFi.localIP());
+        reportPowerSave();
     } else {
         Serial.println("WiFi: could not join configured network, falling back to AP");
         startAccessPoint();
@@ -52,6 +80,7 @@ void WifiSetup::startAccessPoint() {
     esp_wifi_set_ps(WIFI_PS_NONE);
     Serial.print("WiFi: hosting fallback AP, IP ");
     Serial.println(WiFi.softAPIP());
+    reportPowerSave();
 }
 
 bool WifiSetup::maintain() {

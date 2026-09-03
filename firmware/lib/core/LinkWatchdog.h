@@ -37,6 +37,14 @@ public:
 
     bool hasEverReceivedPacket() const { return hasReceived_; }
 
+    // The last sequence number actually accepted as fresh. Only
+    // meaningful once hasEverReceivedPacket() is true. Exposed for
+    // diagnostics -- a packet rejected by observePacket() is otherwise
+    // indistinguishable from one that never arrived, and "which sequence
+    // did you compare mine against" is the one fact that tells those
+    // apart from the PC side.
+    uint32_t lastAcceptedSeq() const { return lastSeq_; }
+
 private:
     float timeoutS_;
     bool hasReceived_ = false;

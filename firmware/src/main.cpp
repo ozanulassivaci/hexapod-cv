@@ -63,6 +63,15 @@ static IPAddress pcAddr;
 static uint16_t pcPort = 0;
 static bool havePcAddr = false;
 
+// One serial line per inbound UDP packet and per telemetry reply. On by
+// default: every silent drop path below (malformed, stale, no return
+// address, encode failure) is otherwise indistinguishable from "the
+// packet never arrived" when read from the PC side, which is exactly the
+// gap that made a red LINK light unfalsifiable. At the GUI's 10Hz
+// heartbeat this is ~20 lines/s, which is a lot to watch behind other
+// output -- "udp log off" over serial silences it without a reflash.
+static bool udpLogEnabled = true;
+
 static MotionState lastMotion;
 static bool hasMotion = false;
 static uint32_t faultFlags = 0;
@@ -391,13 +400,34 @@ static bool driveGaitOutputs() {
 }
 
 static void sendTelemetry(const Telemetry& t) {
-    if (!havePcAddr) return;
+    if (!havePcAddr) {
+        // Nothing has ever been received, so there is no return address to
+        // reply to -- the robot never initiates, it only answers.
+        if (udpLogEnabled) Serial.println("tx SKIP no return address yet");
+        return;
+    }
     uint8_t buf[4096];
     size_t len = encodeTelemetry(t, buf, sizeof(buf));
-    if (len == 0) return;
+    if (len == 0) {
+        // Encode overflowed the buffer above (a full 18-servo profile dump
+        // is the only realistic way) -- silently sending nothing looks
+        // exactly like a dead link from the PC, so say so.
+        if (udpLogEnabled) Serial.println("tx FAIL encodeTelemetry returned 0 (buffer too small?)");
+        return;
+    }
     udp.beginPacket(pcAddr, pcPort);
     udp.write(buf, len);
-    udp.endPacket();
+    bool sent = udp.endPacket() == 1;
+    if (udpLogEnabled) {
+        Serial.print(sent ? "tx " : "tx FAIL ");
+        Serial.print(pcAddr);
+        Serial.print(':');
+        Serial.print(pcPort);
+        Serial.print(' ');
+        Serial.print(len);
+        Serial.print("B seq_echo=");
+        Serial.println(t.seqEcho);
+    }
 }
 
 static void buildBaseTelemetry(Telemetry& t) {
@@ -421,27 +451,103 @@ static void buildBaseTelemetry(Telemetry& t) {
 
 // --- UDP -----------------------------------------------------------------
 
+static const char* commandTypeName(CommandType type) {
+    switch (type) {
+        case CommandType::Walk: return "walk";
+        case CommandType::Turn: return "turn";
+        case CommandType::Stop: return "stop";
+        case CommandType::BodyHeight: return "body_height";
+        case CommandType::PanTilt: return "pan_tilt";
+        case CommandType::Face: return "face";
+        case CommandType::Calibrate: return "calibrate";
+        case CommandType::CalibrationMode: return "calibration_mode";
+        case CommandType::ReadOffsets: return "read_offsets";
+        case CommandType::WriteOffsets: return "write_offsets";
+        case CommandType::BenchMode: return "bench_mode";
+        case CommandType::BenchPulse: return "bench_pulse";
+        case CommandType::BenchRelease: return "bench_release";
+        case CommandType::RecordLimit: return "record_limit";
+        case CommandType::BenchHealthNote: return "bench_health_note";
+        case CommandType::Ping: return "ping";
+        case CommandType::Unknown: return "unknown";
+    }
+    return "unknown";
+}
+
+// "rx <ip>:<port> <n>B " -- the common prefix of every per-packet line,
+// so source address and size are present on the drop paths too, not just
+// the happy one.
+static void logRxPrefix(const IPAddress& from, uint16_t port, int len) {
+    Serial.print("rx ");
+    Serial.print(from);
+    Serial.print(':');
+    Serial.print(port);
+    Serial.print(' ');
+    Serial.print(len);
+    Serial.print("B ");
+}
+
 static void processUdp() {
     int packetSize;
     while ((packetSize = udp.parsePacket()) > 0) {
         static uint8_t buf[UDP_RECV_BUFFER_SIZE];
         int len = udp.read(buf, sizeof(buf) - 1);
-        if (len <= 0) continue;
+        IPAddress from = udp.remoteIP();
+        uint16_t fromPort = udp.remotePort();
+        if (len <= 0) {
+            if (udpLogEnabled) {
+                logRxPrefix(from, fromPort, len);
+                Serial.println("DROP empty read");
+            }
+            continue;
+        }
 
-        pcAddr = udp.remoteIP();
-        pcPort = udp.remotePort();
+        pcAddr = from;
+        pcPort = fromPort;
         havePcAddr = true;
 
         DecodeResult decoded = decodeCommand(buf, static_cast<size_t>(len));
         if (!decoded.ok) {
-            continue;  // malformed packet dropped without crashing, no reply -- nothing valid to echo a seq for
+            // Malformed packet dropped without crashing, no reply --
+            // nothing valid to echo a seq for. Logged with the decoder's
+            // own reason: from the PC this is otherwise identical to the
+            // packet never arriving.
+            if (udpLogEnabled) {
+                logRxPrefix(from, fromPort, len);
+                Serial.print("DROP decode: ");
+                Serial.println(decoded.error[0] ? decoded.error : "unspecified");
+            }
+            continue;
         }
 
         bool fresh = linkWatchdog.observePacket(decoded.command.seq, millis() / 1000.0f);
         if (!fresh) {
-            continue;  // stale/duplicate, latest-wins -- silently dropped, not an error
+            // Stale/duplicate, latest-wins -- silently dropped, not an
+            // error. Logged with both sequence numbers because that pair
+            // is the only thing that distinguishes "reordered packet" from
+            // "this PC restarted its counter and every packet it sends
+            // from now on will be rejected" -- see docs/protocol.md
+            // Section 4.
+            if (udpLogEnabled) {
+                logRxPrefix(from, fromPort, len);
+                Serial.print("DROP stale type=");
+                Serial.print(commandTypeName(decoded.command.type));
+                Serial.print(" seq=");
+                Serial.print(decoded.command.seq);
+                Serial.print(" lastAccepted=");
+                Serial.println(linkWatchdog.lastAcceptedSeq());
+            }
+            continue;
         }
         faultFlags &= ~FAULT_LINK_TIMEOUT_BIT;
+
+        if (udpLogEnabled) {
+            logRxPrefix(from, fromPort, len);
+            Serial.print("ok type=");
+            Serial.print(commandTypeName(decoded.command.type));
+            Serial.print(" seq=");
+            Serial.println(decoded.command.seq);
+        }
 
         Telemetry telemetry;
         buildBaseTelemetry(telemetry);
@@ -459,7 +565,8 @@ static void processUdp() {
 // same USB+servo-rail risk as anything else that moves a servo; see
 // docs/HOW_TO_USE.md. Minimal grammar, not a full alternate control
 // surface: status, cal arm/disarm, bench arm/disarm, bench pulse <board>
-// <channel> <pulse_us>, bench release <board> <channel>, ping.
+// <channel> <pulse_us>, bench release <board> <channel>, ping,
+// udp log on/off.
 
 static void printStatus() {
     Serial.print("wifi=");
@@ -486,6 +593,12 @@ static void processSerialLine(String line) {
     }
     if (line == "ping") {
         Serial.println("pong");
+        return;
+    }
+    if (line == "udp log on" || line == "udp log off") {
+        udpLogEnabled = (line == "udp log on");
+        Serial.print("udp packet logging ");
+        Serial.println(udpLogEnabled ? "on" : "off");
         return;
     }
     if (line == "cal arm") {
@@ -546,7 +659,8 @@ static void processSerialLine(String line) {
     }
 
     Serial.println("unknown command. try: status, ping, cal arm/disarm, bench arm/disarm, "
-                    "bench pulse <board> <channel> <pulse_us>, bench release <board> <channel>");
+                    "bench pulse <board> <channel> <pulse_us>, bench release <board> <channel>, "
+                    "udp log on/off");
 }
 
 static void processSerial() {
@@ -570,7 +684,15 @@ void setup() {
 
     wifiSetup.begin();
 
-    udp.begin(ROBOT_UDP_PORT);
+    // begin() returns 1 on success, 0 if the socket couldn't be created.
+    // Previously assumed rather than checked -- a failure here produces a
+    // robot that answers ICMP ping and shows no ICMP port-unreachable
+    // (nothing is bound to reject with), i.e. it looks alive from the PC
+    // right up until nothing ever answers a command.
+    uint8_t udpOk = udp.begin(ROBOT_UDP_PORT);
+    Serial.print("boot: udp.begin(");
+    Serial.print(ROBOT_UDP_PORT);
+    Serial.println(udpOk == 1 ? ") ok -- listening" : ") FAILED -- no UDP socket, nothing will answer");
 
     ArduinoOTA.setHostname(OTA_HOSTNAME);
     ArduinoOTA.setPassword(OTA_PASSWORD);
