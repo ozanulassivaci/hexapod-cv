@@ -62,6 +62,14 @@ _WORKSPACE_FILL = QColor(60, 60, 70, 90)
 _ENVELOPE_FILL = QColor(70, 130, 200, 90)
 _FORBIDDEN_FILL = QColor(180, 40, 40, 110)
 _JOINT_COLOR = QColor(230, 230, 230)
+# Gait trajectory overlay. Swing and stance are deliberately different
+# colours AND different weights: on the bench the foot is in free air the
+# whole time, so "which half of the cycle am I looking at" has no physical
+# cue at all -- the drawing is the only thing that says.
+_TRAJ_STANCE_COLOR = QColor(90, 170, 255)
+_TRAJ_SWING_COLOR = QColor(255, 150, 60)
+_TRAJ_MARKER_COLOR = QColor(255, 255, 255)
+
 _ZONE_COLOR = {
     "green": QColor(60, 180, 75),
     "amber": QColor(235, 160, 30),
@@ -163,6 +171,13 @@ class SingleLegView(QWidget):
         layout.addWidget(self._side_canvas, 1)
         layout.addWidget(self._top_canvas, 1)
 
+    def set_gait_overlay(self, trajectory, phase: float, visible: bool, zoom: bool = False) -> None:
+        """trajectory: control.gait_preview.TrajectoryPoint tuple, or
+        None. Drawn in the side view only -- the whole point of the trace
+        is the swing arc's shape in the femur/tibia plane, which is
+        exactly what that view is."""
+        self._side_canvas.set_gait_overlay(trajectory, phase, visible, zoom)
+
     def tick(self) -> None:
         self._side_canvas.update()
         self._top_canvas.update()
@@ -183,6 +198,95 @@ class _BaseCanvas(QWidget):
 
 
 class _SideViewCanvas(_BaseCanvas):
+    def __init__(self, current_deg: dict, known_limits: dict, parent=None) -> None:
+        super().__init__(current_deg, known_limits, parent)
+        self._trajectory = None
+        self._gait_phase = 0.0
+        self._gait_visible = False
+        self._gait_zoom = False
+
+    def set_gait_overlay(self, trajectory, phase: float, visible: bool, zoom: bool = False) -> None:
+        self._trajectory = trajectory
+        self._gait_phase = phase
+        self._gait_visible = visible
+        self._gait_zoom = zoom
+
+    def _origin_and_scale(self) -> tuple[QPointF, float]:
+        """Zoomed to the gait path when asked, otherwise the whole
+        reachable workspace like every other mode.
+
+        The foot's whole travel over a cycle is a few tens of mm inside a
+        ~247mm reach, so at the default scale the swing arc is a squiggle
+        a couple of dozen pixels across -- technically drawn, useless for
+        judging whether the arc is too shallow or lopsided, which is the
+        entire reason for drawing it. Zoom trades the surrounding context
+        (envelope wedges, forbidden zones, most of the leg) for a shape
+        big enough to actually read."""
+        if not (self._gait_zoom and self._gait_visible and self._trajectory):
+            return super()._origin_and_scale()
+
+        pts = [_femur_tibia_points(p.angles.femur_deg, p.angles.tibia_deg)[1] for p in self._trajectory]
+        xs = [x for x, _ in pts]
+        zs = [z for _, z in pts]
+        span_x = max(xs) - min(xs)
+        span_z = max(zs) - min(zs)
+        # Floor the span so an idle (collapsed) path doesn't divide by
+        # zero or zoom to absurdity.
+        span = max(span_x, span_z, 20.0) * 1.6
+        margin_px = 24.0
+        available = max(40.0, min(self.width(), self.height()) - 2 * margin_px)
+        scale = available / span
+        mid_x = (max(xs) + min(xs)) / 2.0
+        mid_z = (max(zs) + min(zs)) / 2.0
+        return QPointF(self.width() / 2.0 - mid_x * scale, self.height() / 2.0 + mid_z * scale), scale
+
+    def _draw_gait_trajectory(self, painter, origin, scale) -> None:
+        """One cycle of the commanded foot path, split into its stance
+        and swing runs, with the current phase marked.
+
+        Foot positions come from the gait engine in the leg's own local
+        (l_forward, z) terms, which is what this view already plots -- so
+        the trace lands on the same axes as the live stick figure rather
+        than being drawn in a parallel coordinate system that happens to
+        look similar."""
+        if not self._gait_visible or not self._trajectory:
+            return
+
+        def to_pt(p):
+            # Same forward-kinematics this view already uses for the live
+            # stick figure, on the gait engine's own joint angles -- so
+            # the trace and the leg drawn on top of it are guaranteed to
+            # share one coordinate system rather than two that agree by
+            # coincidence.
+            _elbow, foot = _femur_tibia_points(p.angles.femur_deg, p.angles.tibia_deg)
+            return self.to_screen(foot[0], foot[1], origin, scale)
+
+        painter.setBrush(Qt.NoBrush)
+        # Walk the cycle in runs of like phase-kind so stance and swing
+        # are separate strokes rather than one two-coloured polyline.
+        run_start = 0
+        points = self._trajectory
+        for i in range(1, len(points) + 1):
+            at_end = i == len(points)
+            if not at_end and points[i].in_stance == points[run_start].in_stance:
+                continue
+            in_stance = points[run_start].in_stance
+            pen = QPen(_TRAJ_STANCE_COLOR if in_stance else _TRAJ_SWING_COLOR, 2 if in_stance else 3)
+            if in_stance:
+                pen.setStyle(Qt.DashLine)
+            painter.setPen(pen)
+            path = QPainterPath(to_pt(points[run_start]))
+            for j in range(run_start + 1, min(i + 1, len(points))):
+                path.lineTo(to_pt(points[j]))
+            painter.drawPath(path)
+            run_start = i
+
+        # Current phase marker.
+        nearest = min(points, key=lambda p: abs(p.phase - self._gait_phase))
+        painter.setPen(QPen(_TRAJ_MARKER_COLOR, 2))
+        painter.setBrush(QBrush(_TRAJ_SWING_COLOR if not nearest.in_stance else _TRAJ_STANCE_COLOR))
+        painter.drawEllipse(to_pt(nearest), 6.0, 6.0)
+
     def to_screen(self, l_forward_mm: float, z_mm: float, origin: QPointF, scale: float) -> QPointF:
         # +l_forward = screen right, +z = up (screen up = smaller pixel y).
         return QPointF(origin.x() + l_forward_mm * scale, origin.y() - z_mm * scale)
@@ -257,6 +361,10 @@ class _SideViewCanvas(_BaseCanvas):
         painter.setBrush(QBrush(_FORBIDDEN_FILL))
         self._draw_forbidden_zones(painter, "femur", (0.0, 0.0), FEMUR_LENGTH_MM, 0.0, coxa_screen, origin, scale)
         self._draw_forbidden_zones(painter, "tibia", elbow, TIBIA_LENGTH_MM, femur_deg, elbow_screen, origin, scale)
+
+        # Above the envelope/forbidden fills, below the live stick figure:
+        # the trace is context for the pose, not a replacement for it.
+        self._draw_gait_trajectory(painter, origin, scale)
 
         # Each segment gets its own joint's color, independently -- not
         # combined into one verdict for the whole leg. A combined

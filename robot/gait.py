@@ -316,7 +316,12 @@ def _slew_one(current: float, goal: float, max_delta: float) -> float:
     return current + delta
 
 
-def _slew_limit(current: JointAngles, goal: JointAngles, max_delta_deg: float) -> JointAngles:
+def slew_limit(current: JointAngles, goal: JointAngles, max_delta_deg: float) -> JointAngles:
+    """One tick of the per-joint velocity bound step() applies. Public
+    because control/gait_preview.py drives a single leg through the same
+    math with phase under manual control, and reimplementing this there
+    would mean the preview no longer bounded motion the way real gait
+    does -- the one property that makes it safe to point at hardware."""
     return JointAngles(
         coxa_deg=_slew_one(current.coxa_deg, goal.coxa_deg, max_delta_deg),
         femur_deg=_slew_one(current.femur_deg, goal.femur_deg, max_delta_deg),
@@ -364,7 +369,7 @@ def step(
             joint_clip_count += 1
             joint_clip_worst_deg = max(joint_clip_worst_deg, joint_overshoot_deg)
             clipped_this_tick = True
-        new_angles.append(_slew_limit(state.leg_angles[i], goal_angles, max_delta_deg))
+        new_angles.append(slew_limit(state.leg_angles[i], goal_angles, max_delta_deg))
 
     return GaitState(
         phase=new_phase,

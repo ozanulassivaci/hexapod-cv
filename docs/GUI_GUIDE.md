@@ -398,6 +398,65 @@ bare-servo bring-up Bench Test covers.
   from that joint's own neutral — refreshes automatically after you mark
   something.
 
+**Gait preview mode:**
+
+This drives the leg through the **real gait cycle** — the same
+`robot/gait.py` engine the assembled robot walks with, at the phase
+offset of whichever leg position you picked above. It exists to check the
+gait and the physical build together before you commit to five more legs.
+Joint mode and IK mode only ever drive static poses; this is the one that
+shows you what walking actually asks of the leg.
+
+- **Pre-flight.** Before it will start, it checks that gait's envelope
+  fits inside the mechanical limits you have actually marked for this
+  leg's three servos, with the safe margin to spare. If it doesn't, it
+  refuses and names the joint and the gap ("femur: no MAX limit marked",
+  "coxa: gait needs more range than marked -- MAX short by 3.2 deg").
+  It does **not** quietly clamp the motion: a clamped gait is not the
+  gait, and showing you one would defeat the point of previewing. Mark
+  the missing limits in Joint mode, or tick **Override** to run anyway
+  and accept that gait will drive into territory you haven't verified.
+- **WASD / arrows walk, Q / E turn** — the same keys as the Operate tab,
+  running the same intent code, so identical keys really do produce
+  identical intent. The keys only do anything while live gait is running;
+  if they seem dead, click the leg view to give the tab focus.
+- **gait speed** is the gait's own speed parameter. It changes what the
+  gait *is* — stride length and phase rate scale together with it.
+- **slow motion %** is separate, and defaults to 10%. It scales the whole
+  preview — phase rate and the per-joint slew bound together — without
+  changing the gait. This is the one to leave low: at 10% a full cycle
+  takes about 14 seconds, which is slow enough to reach RELEASE LEG
+  before anything finishes happening. Turn it up only once you've watched
+  a few cycles and trust what it's doing.
+- **Phase step buttons and slider.** Advance the cycle by hand and hold
+  it anywhere, with the phase shown numerically. Use this first: step
+  through a whole cycle and look at the leg at each point before you
+  ever let it run live.
+- **STANCE / SWING.** Which half of the cycle the current phase is in.
+  Worth watching, because on the bench it's counterintuitive: during
+  stance the foot would be planted and carrying the robot's weight, but
+  your leg is clamped with its foot in the air, so stance is exactly the
+  part where the leg looks like it's barely doing anything.
+- **Start live gait / Stop.** Live motion is what reveals problems you'd
+  feel rather than see. Stop holds the leg at the current phase rather
+  than returning it anywhere.
+- **Zoom the side view to the foot path** (on by default). The foot's
+  whole travel is a few tens of millimetres inside a ~247mm reach, so at
+  full-leg scale the swing arc is a tiny squiggle. Zoomed, the shape is
+  readable — which is the point, since a swing that's too shallow, too
+  tall or lopsided shows up in the shape long before it shows up in a
+  number.
+
+In the side view you'll see one full cycle of the commanded foot path:
+a **solid orange arc** for the swing (foot lifted, travelling forward)
+and a **dashed blue line** for the stance (foot at ground level, where it
+would be planted). A marker rides the path at the current phase. The
+envelope and forbidden-zone overlays stay exactly as they are in the
+other modes.
+
+RELEASE LEG works here as everywhere else, and stops live gait outright
+as well as dropping the servos.
+
 **IK mode:**
 
 - **Foot X / Y / Z (mm).** In this leg's own local frame, not the robot's

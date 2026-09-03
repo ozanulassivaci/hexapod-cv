@@ -24,6 +24,7 @@ import time
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QGroupBox,
@@ -32,12 +33,15 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QSpinBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from control import gait_preview as gait
+from control.manual_intent import MOVE_KEYS, TURN_KEYS, turn_intent, walk_intent
 from control.single_leg import EXPLORATION_ORDER, TEST_LEG, deg_from_neutral, is_step_allowed
 from robot.gait import (
     GAIT_ENVELOPE_COXA_MAX_DEG,
@@ -47,8 +51,10 @@ from robot.gait import (
     GAIT_ENVELOPE_TIBIA_MAX_DEG,
     GAIT_ENVELOPE_TIBIA_MIN_DEG,
 )
+from robot.gait import DEFAULT_BODY_HEIGHT
 from robot.kinematics import (
     LEGS,
+    SAFE_LIMIT_MARGIN_DEG,
     JointAngles,
     Point3,
     clamp_joint_angles,
@@ -125,6 +131,22 @@ class SingleLegTab(QWidget):
             "tibia": (None, None),
         }
         self._armed_since: float | None = None
+        self._last_profiles = None
+
+        # --- gait preview state ---
+        self._gait_phase = 0.0
+        self._gait_angles = JointAngles(0.0, 0.0, 0.0)
+        self._gait_live = False
+        self._gait_override = False
+        self._gait_last_tick: float | None = None
+        self._gait_move_keys: set[int] = set()
+        self._gait_turn_keys: set[int] = set()
+        # Last integer pulse actually sent per (board, channel). Gait
+        # commands three joints every tick; re-sending a pulse the
+        # PCA9685 already holds changes nothing electrically, so skipping
+        # it costs nothing and keeps the packet rate down. See the
+        # deadband note in docs/GUI_GUIDE.md.
+        self._last_sent_pulse: dict[tuple[int, int], int] = {}
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._build_note_section())
@@ -142,6 +164,7 @@ class SingleLegTab(QWidget):
         self._stack = QStackedWidget()
         self._stack.addWidget(self._build_joint_mode())
         self._stack.addWidget(self._build_ik_mode())
+        self._stack.addWidget(self._build_gait_mode())
         # Scrollable with a floor well below the stack's natural size
         # (three joints' worth of step/mark buttons adds up) -- without
         # this, that natural size becomes this tab's minimumSizeHint,
@@ -170,8 +193,40 @@ class SingleLegTab(QWidget):
         # when the window does instead of splitting the gain with blank
         # space down here.
 
+        # Needed so WASD/QE reach this tab at all while previewing. Any
+        # key this tab doesn't consume falls through to MainWindow, which
+        # keeps the Operate tab's own handling working untouched.
+        self.setFocusPolicy(Qt.StrongFocus)
+
         self._set_controls_enabled(False)
         self._refresh_known_limits()
+
+    # --- keyboard (gait preview only) -------------------------------------
+
+    def _gait_keys_active(self) -> bool:
+        return self._stack.currentIndex() == 2 and self._gait_live
+
+    def keyPressEvent(self, event) -> None:
+        key = event.key()
+        if self._gait_keys_active() and not event.isAutoRepeat():
+            if key in MOVE_KEYS:
+                self._gait_move_keys.add(key)
+                return
+            if key in TURN_KEYS:
+                self._gait_turn_keys.add(key)
+                return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:
+        key = event.key()
+        if self._gait_keys_active() and not event.isAutoRepeat():
+            if key in MOVE_KEYS:
+                self._gait_move_keys.discard(key)
+                return
+            if key in TURN_KEYS:
+                self._gait_turn_keys.discard(key)
+                return
+        super().keyReleaseEvent(event)
 
     # --- construction -----------------------------------------------------
 
@@ -267,14 +322,25 @@ class SingleLegTab(QWidget):
         self._ik_mode_button.setFocusPolicy(Qt.NoFocus)
         self._ik_mode_button.setCheckable(True)
         self._ik_mode_button.clicked.connect(lambda: self._set_mode(1))
+        self._gait_mode_button = QPushButton("Gait preview")
+        self._gait_mode_button.setFocusPolicy(Qt.NoFocus)
+        self._gait_mode_button.setCheckable(True)
+        self._gait_mode_button.clicked.connect(lambda: self._set_mode(2))
         row.addWidget(self._joint_mode_button)
         row.addWidget(self._ik_mode_button)
+        row.addWidget(self._gait_mode_button)
         return container
 
     def _set_mode(self, index: int) -> None:
+        # Leaving gait preview always stops live motion. Switching tabs
+        # or modes must never leave the leg walking behind your back.
+        if index != 2:
+            self._stop_gait_live()
         self._stack.setCurrentIndex(index)
         self._joint_mode_button.setChecked(index == 0)
         self._ik_mode_button.setChecked(index == 1)
+        self._gait_mode_button.setChecked(index == 2)
+        self._view.set_gait_overlay(None, 0.0, index == 2, False)
 
     def _build_joint_mode(self) -> QWidget:
         container = QWidget()
@@ -443,6 +509,11 @@ class SingleLegTab(QWidget):
 
         self._arm_button.setEnabled(not armed)
         self._disarm_button.setEnabled(armed)
+
+        if self._stack.currentIndex() == 2:
+            self._gait_tick()
+        self._gait_start_button.setEnabled(self._enabled_base and not self._gait_live)
+        self._gait_stop_button.setEnabled(self._gait_live)
         self._set_controls_enabled(armed)
         self._update_step_button_states()
         self._view.tick()
@@ -474,6 +545,10 @@ class SingleLegTab(QWidget):
     # --- leg / servo_index --------------------------------------------
 
     def _on_leg_changed(self, index: int) -> None:
+        # A different leg means different servos, a different phase
+        # offset and a different geometry -- none of which the current
+        # pre-flight result or live motion applies to.
+        self._stop_gait_live()
         self._leg_index = index
         self._refresh_known_limits()
 
@@ -484,10 +559,12 @@ class SingleLegTab(QWidget):
         telemetry = self._send(ReadOffsetsCommand())
         if telemetry is None or not telemetry.ok or telemetry.profiles is None:
             return
+        self._last_profiles = telemetry.profiles
         for joint in ("coxa", "femur", "tibia"):
             profile = telemetry.profiles[self._servo_index(joint)]
             self._known_limits[joint] = (profile.min_deg_from_neutral, profile.max_deg_from_neutral)
             self._limits_label[joint].setText(f"known limits: {_limits_text(profile)}")
+        self._refresh_gait_preflight()
         self._view.tick()
 
     # --- release -----------------------------------------------------
@@ -497,6 +574,13 @@ class SingleLegTab(QWidget):
         self.log_message.emit("test leg released (all three joints limp)")
 
     def _release_all(self) -> None:
+        # Releasing stops gait outright -- it is the panic control, and
+        # a live preview re-commanding pulses would fight it.
+        self._stop_gait_live()
+        # The channels are about to be driven to no pulse at all, so
+        # whatever was last sent no longer describes them; clearing this
+        # stops the dedupe above from skipping the next real command.
+        self._last_sent_pulse.clear()
         for joint in ("coxa", "femur", "tibia"):
             board = self._board_combo[joint].currentData()
             channel = self._channel_spin[joint].value()
@@ -531,9 +615,19 @@ class SingleLegTab(QWidget):
         )
         board = self._board_combo[joint].currentData()
         channel = self._channel_spin[joint].value()
-        self.link.send(
-            BenchPulseCommand(board=board, channel=channel, pulse_us=pulse_us, servo_index=servo_index)
-        )
+        # Skip a pulse the PCA9685 is already holding. Rewriting an
+        # identical value produces an identical waveform, so this changes
+        # nothing the servo can see -- but gait preview commands three
+        # joints every tick, and most ticks don't move every joint, so
+        # this keeps the packet rate near what's actually changing. It
+        # also removes any chance of dither from angle_to_pulse_us()'s
+        # rounding flipping between two adjacent integers while a joint
+        # sits at its goal.
+        if self._last_sent_pulse.get((board, channel)) != pulse_us:
+            self.link.send(
+                BenchPulseCommand(board=board, channel=channel, pulse_us=pulse_us, servo_index=servo_index)
+            )
+            self._last_sent_pulse[(board, channel)] = pulse_us
         self._current_deg[joint] = raw_deg
         self._angle_label[joint].setText(f"{raw_deg:+.1f} deg from neutral")
         self._view.tick()  # live stick figure follows every commanded step immediately, not on the next tick()
@@ -614,6 +708,269 @@ class SingleLegTab(QWidget):
             self._angle_label[joint].setText(f"{raw_deg:+.1f} deg from neutral")
 
     # --- enable/disable ----------------------------------------------------
+
+
+    # --- gait preview mode -------------------------------------------------
+
+    def _build_gait_mode(self) -> QWidget:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+
+        note = QLabel(
+            "Drives this leg through the REAL gait cycle (robot/gait.py, the same "
+            "engine the assembled robot walks with) at the phase offset of the leg "
+            "position selected above. Clamp the leg with the foot hanging free "
+            "before running this -- see docs/HOW_TO_USE.md."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(_NOTE_STYLE)
+        layout.addWidget(note)
+
+        # Pre-flight
+        pre_box = QGroupBox("Pre-flight: does gait fit inside your marked limits?")
+        pre_layout = QVBoxLayout(pre_box)
+        self._gait_preflight_label = QLabel("not checked yet")
+        self._gait_preflight_label.setWordWrap(True)
+        self._gait_preflight_label.setFocusPolicy(Qt.NoFocus)
+        pre_layout.addWidget(self._gait_preflight_label)
+        self._gait_override_check = QCheckBox(
+            "Override: run anyway, past what I have marked (I accept the risk)"
+        )
+        self._gait_override_check.setFocusPolicy(Qt.NoFocus)
+        self._gait_override_check.toggled.connect(self._on_gait_override_toggled)
+        pre_layout.addWidget(self._gait_override_check)
+        layout.addWidget(pre_box)
+
+        # Intent
+        intent_box = QGroupBox("Walk intent (same keys as the Operate tab)")
+        intent_layout = QVBoxLayout(intent_box)
+        keys_note = QLabel("WASD / arrows: walk    Q / E: turn    (click the leg view first if keys do nothing)")
+        keys_note.setStyleSheet(_NOTE_STYLE)
+        intent_layout.addWidget(keys_note)
+        self._gait_intent_label = QLabel("intent: idle")
+        self._gait_intent_label.setStyleSheet("font-weight: bold;")
+        self._gait_intent_label.setFocusPolicy(Qt.NoFocus)
+        intent_layout.addWidget(self._gait_intent_label)
+
+        self._gait_speed_slider, speed_row = self._build_gait_slider("gait speed", 0, 100, 40)
+        intent_layout.addLayout(speed_row)
+        self._gait_height_slider, height_row = self._build_gait_slider(
+            "body height", 0, 100, int(DEFAULT_BODY_HEIGHT)
+        )
+        intent_layout.addLayout(height_row)
+        self._gait_slow_slider, slow_row = self._build_gait_slider(
+            "slow motion %", int(gait.MIN_SLOW_MOTION * 100), int(gait.MAX_SLOW_MOTION * 100),
+            int(gait.DEFAULT_SLOW_MOTION * 100),
+        )
+        intent_layout.addLayout(slow_row)
+        slow_note = QLabel(
+            "Slow motion scales the whole preview -- phase rate and the per-joint "
+            "slew bound together -- independently of gait speed above. Gait speed "
+            "changes what the gait *is* (stride length and phase rate); slow motion "
+            "only changes how fast you watch it."
+        )
+        slow_note.setWordWrap(True)
+        slow_note.setStyleSheet(_NOTE_STYLE)
+        intent_layout.addWidget(slow_note)
+        layout.addWidget(intent_box)
+
+        # Phase
+        phase_box = QGroupBox("Gait cycle")
+        phase_layout = QVBoxLayout(phase_box)
+        self._gait_phase_label = QLabel("phase 0.000    STANCE")
+        self._gait_phase_label.setStyleSheet("font-weight: bold;")
+        self._gait_phase_label.setFocusPolicy(Qt.NoFocus)
+        phase_layout.addWidget(self._gait_phase_label)
+
+        step_row = QHBoxLayout()
+        for step in reversed(gait.PHASE_STEPS):
+            b = QPushButton(f"-{step:g}")
+            b.setFocusPolicy(Qt.NoFocus)
+            b.clicked.connect(lambda _c=False, d=-step: self._on_gait_phase_step(d))
+            step_row.addWidget(b)
+        for step in gait.PHASE_STEPS:
+            b = QPushButton(f"+{step:g}")
+            b.setFocusPolicy(Qt.NoFocus)
+            b.clicked.connect(lambda _c=False, d=step: self._on_gait_phase_step(d))
+            step_row.addWidget(b)
+        phase_layout.addLayout(step_row)
+
+        self._gait_zoom_check = QCheckBox("Zoom the side view to the foot path (the arc is tiny at full-leg scale)")
+        self._gait_zoom_check.setFocusPolicy(Qt.NoFocus)
+        self._gait_zoom_check.setChecked(True)
+        phase_layout.addWidget(self._gait_zoom_check)
+
+        self._gait_phase_slider = QSlider(Qt.Horizontal)
+        self._gait_phase_slider.setFocusPolicy(Qt.NoFocus)
+        self._gait_phase_slider.setRange(0, 999)
+        self._gait_phase_slider.valueChanged.connect(self._on_gait_phase_slider)
+        phase_layout.addWidget(self._gait_phase_slider)
+
+        run_row = QHBoxLayout()
+        self._gait_start_button = QPushButton("Start live gait")
+        self._gait_start_button.setFocusPolicy(Qt.NoFocus)
+        self._gait_start_button.clicked.connect(self._on_gait_start)
+        self._gait_stop_button = QPushButton("Stop (hold at phase)")
+        self._gait_stop_button.setFocusPolicy(Qt.NoFocus)
+        self._gait_stop_button.clicked.connect(lambda: self._stop_gait_live())
+        run_row.addWidget(self._gait_start_button)
+        run_row.addWidget(self._gait_stop_button)
+        phase_layout.addLayout(run_row)
+        layout.addWidget(phase_box)
+
+        self._gait_angles_label = QLabel("commanded: coxa 0.0  femur 0.0  tibia 0.0 (deg from neutral)")
+        self._gait_angles_label.setFocusPolicy(Qt.NoFocus)
+        layout.addWidget(self._gait_angles_label)
+        return container
+
+    def _build_gait_slider(self, name: str, lo: int, hi: int, initial: int):
+        row = QHBoxLayout()
+        label = QLabel(name)
+        label.setFixedWidth(110)
+        slider = QSlider(Qt.Horizontal)
+        slider.setFocusPolicy(Qt.NoFocus)
+        slider.setRange(lo, hi)
+        slider.setValue(initial)
+        value_label = QLabel(str(initial))
+        value_label.setFixedWidth(36)
+        slider.valueChanged.connect(lambda v: value_label.setText(str(v)))
+        row.addWidget(label)
+        row.addWidget(slider, 1)
+        row.addWidget(value_label)
+        return slider, row
+
+    # --- gait preview behaviour -------------------------------------------
+
+    def _gait_intent(self) -> tuple[float, float, float, float, float]:
+        """(vx, vy, speed, rotation, body_height) from the live key state
+        and sliders -- walk_intent/turn_intent are the same functions the
+        Operate tab's own WASD handling uses, so identical keys really do
+        produce identical intent rather than merely similar intent."""
+        vx, vy = walk_intent(self._gait_move_keys)
+        rotation = turn_intent(self._gait_turn_keys)
+        if vx == 0.0 and vy == 0.0 and rotation != 0.0:
+            pass  # turning in place is a valid intent on its own
+        speed = float(self._gait_speed_slider.value())
+        body_height = float(self._gait_height_slider.value())
+        return vx, vy, speed, rotation, body_height
+
+    def _gait_slow_motion(self) -> float:
+        return self._gait_slow_slider.value() / 100.0
+
+    def _refresh_gait_preflight(self) -> "gait.PreflightResult":
+        profiles = self._last_profiles
+        result = gait.preflight(self._leg_index, profiles)
+        if result.fits:
+            self._gait_preflight_label.setText(
+                "OK -- gait's envelope fits inside every marked limit for this leg, "
+                f"with {int(SAFE_LIMIT_MARGIN_DEG)} deg of safe margin to spare."
+            )
+            self._gait_preflight_label.setStyleSheet("color: #2e7d32;")
+        elif profiles is None:
+            self._gait_preflight_label.setText(
+                "BLOCKED -- no servo profiles read back yet. Arm bench mode so limits can be read."
+            )
+            self._gait_preflight_label.setStyleSheet(_RELEASE_STYLE)
+        else:
+            lines = "\n".join(f"  - {line}" for line in result.summary_lines())
+            self._gait_preflight_label.setText(
+                "BLOCKED -- gait would drive this leg past what you have verified:\n"
+                f"{lines}\n"
+                "Mark the missing limits in Joint mode, or tick Override to run anyway."
+            )
+            self._gait_preflight_label.setStyleSheet(_RELEASE_STYLE)
+        return result
+
+    def _on_gait_override_toggled(self, checked: bool) -> None:
+        self._gait_override = checked
+        if checked:
+            self.log_message.emit(
+                "gait preview: pre-flight OVERRIDDEN -- gait may drive this leg past marked limits. "
+                "Firmware still enforces whatever limits ARE marked (GatedServoDriver), but "
+                "an unmarked direction has nothing to enforce."
+            )
+
+    def _on_gait_start(self) -> None:
+        result = self._refresh_gait_preflight()
+        if not result.fits and not self._gait_override:
+            self.log_message.emit("gait preview: refused to start -- pre-flight failed, see the Gait preview panel")
+            return
+        self._gait_live = True
+        self._gait_last_tick = None
+        self.setFocus()  # so WASD/QE land here rather than on the Operate tab's handler
+        self.log_message.emit(
+            f"gait preview: live at {int(self._gait_slow_motion() * 100)}% speed -- "
+            "RELEASE LEG stops it instantly"
+        )
+
+    def _stop_gait_live(self) -> None:
+        if self._gait_live:
+            self.log_message.emit("gait preview: stopped, holding at current phase")
+        self._gait_live = False
+        self._gait_move_keys.clear()
+        self._gait_turn_keys.clear()
+
+    def _on_gait_phase_step(self, delta: float) -> None:
+        self._gait_phase = (self._gait_phase + delta) % 1.0
+        self._sync_gait_phase_slider()
+
+    def _on_gait_phase_slider(self, value: int) -> None:
+        if not self._gait_live:
+            self._gait_phase = value / 1000.0
+
+    def _sync_gait_phase_slider(self) -> None:
+        self._gait_phase_slider.blockSignals(True)
+        self._gait_phase_slider.setValue(int(self._gait_phase * 1000) % 1000)
+        self._gait_phase_slider.blockSignals(False)
+
+    def _gait_tick(self) -> None:
+        """One preview tick: advance phase if live, compute this leg's
+        real gait goal at that phase, slew toward it, command it. Both
+        step-through and live share this path -- the only difference is
+        whether phase moves on its own."""
+        now = time.monotonic()
+        dt = 0.0 if self._gait_last_tick is None else min(0.25, now - self._gait_last_tick)
+        self._gait_last_tick = now
+
+        vx, vy, speed, rotation, body_height = self._gait_intent()
+        slow = self._gait_slow_motion()
+
+        if self._gait_live:
+            self._gait_phase = gait.advance_phase(self._gait_phase, dt, speed, slow)
+            self._sync_gait_phase_slider()
+
+        goal = gait.goal_angles(self._leg_index, self._gait_phase, vx, vy, speed, rotation, body_height)
+        self._gait_angles = gait.slew_toward(self._gait_angles, goal, dt, slow)
+
+        if self._enabled_base:
+            for joint, raw in (
+                ("coxa", self._gait_angles.coxa_deg),
+                ("femur", self._gait_angles.femur_deg),
+                ("tibia", self._gait_angles.tibia_deg),
+            ):
+                self._send_joint_angle(joint, raw)
+
+        stance = gait.stance_label(self._leg_index, self._gait_phase)
+        self._gait_phase_label.setText(f"phase {self._gait_phase:0.3f}    {stance}")
+        self._gait_phase_label.setStyleSheet(
+            "font-weight: bold; color: #ef6c00;" if stance == "SWING" else "font-weight: bold; color: #1565c0;"
+        )
+        moving = "live" if self._gait_live else "held"
+        self._gait_intent_label.setText(
+            f"intent: vx={vx:+.2f} vy={vy:+.2f} turn={rotation:+.2f} speed={speed:.0f} ({moving})"
+        )
+        a = self._gait_angles
+        self._gait_angles_label.setText(
+            f"commanded: coxa {deg_from_neutral('coxa', a.coxa_deg):+.1f}  "
+            f"femur {deg_from_neutral('femur', a.femur_deg):+.1f}  "
+            f"tibia {deg_from_neutral('tibia', a.tibia_deg):+.1f} (deg from neutral)"
+        )
+        self._view.set_gait_overlay(
+            gait.trajectory(self._leg_index, vx, vy, speed, rotation, body_height),
+            self._gait_phase,
+            True,
+            self._gait_zoom_check.isChecked(),
+        )
 
     def _set_controls_enabled(self, enabled: bool) -> None:
         self._enabled_base = enabled

@@ -326,6 +326,36 @@ range without hitting the clamp, the table edge, or the table surface.
 5. Servo rail **ON**. Proceed to the **Test Leg** tab
    (`docs/GUI_GUIDE.md`) for the actual exploration.
 
+### Before running gait preview specifically
+
+Gait preview (Test Leg tab) moves all three joints together, continuously,
+through the full walking cycle — a much larger swept volume than the
+one-joint-at-a-time stepping the clamp instructions above were written
+for. Before starting it:
+
+1. **The foot must hang completely free.** No ground contact, nothing
+   under it, nothing it can catch on at any point in the cycle. Gait
+   assumes the foot is planted and bearing weight during stance; on the
+   bench it isn't, and that's fine — but only if nothing is in the way.
+2. Re-check the swept volume by hand with the rail off, the same way as
+   above, but through the *whole* range this time: the leg will reach
+   further forward and back during a walking cycle than during
+   single-joint exploration.
+3. Start with **slow motion at its 10% default** and use the phase
+   step-through first, before live motion. Watch one complete cycle a
+   step at a time and look at the leg at each point.
+4. Keep a hand near **RELEASE LEG**. At 10% a full cycle takes about 14
+   seconds, which is deliberately slow enough to stop it mid-motion.
+
+If a servo hunts or buzzes slightly at some angles while unloaded and
+stops when you damp it with a finger, that's deadband oscillation with no
+mechanical load to settle it — expected on a bench leg, not a fault, and
+not something software can detect (there is no position feedback
+anywhere in this system). The app does avoid making it worse: it never
+re-sends a pulse a channel is already holding, so a joint sitting still
+is genuinely being left alone rather than being re-commanded to the same
+place many times a second.
+
 If you ever need to reposition the clamp after starting exploration:
 servo rail **OFF** first, same as any other rewiring — don't loosen a
 clamp with the rail live and a servo potentially mid-command.
