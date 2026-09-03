@@ -89,6 +89,8 @@ the robot not moving without plugging in USB":
 | `bench_armed` | yes | Same idea, for the separate bench-mode gate (§8) — a GUI must be able to show these two arm states independently, since they're independent gates. |
 | `link_timeout_s` | yes | The robot's own compiled-in failsafe timeout. This is the runtime cross-check from §5, not a debugging field as such — the PC compares it against its own `LINK_TIMEOUT_S` on every telemetry receipt and surfaces a loud warning on mismatch (`RobotLink.constants_warning`). |
 | `robot_assembled` | yes | The robot's own compiled-in `ROBOT_ASSEMBLED` build flag (§9) — reported for a glanceable GUI display, *not* cross-checked, since there's no PC-side expected value to compare it against and no way to detect a stale flag from anything this system observes. |
+| `stale_drop_count`, `malformed_drop_count` | yes | Cumulative since the robot booted (not since this GUI connected). Packets rejected by the sequence-freshness rule, and packets that failed to decode, respectively. See §4 — these are what distinguish "my packets never arrive" from "they arrive and the robot throws them away" without plugging in USB. |
+| `last_accepted_seq` | yes, nullable | The sequence number the receiver will compare the next packet against; `null` until it has accepted one (0 is a real sequence number and can't double as "nothing yet"). A value far above what the GUI is currently sending is the signature of a rejected sequence stream (§4). |
 | `profiles` | yes, nullable | Full servo profile table (offset, sign, bench-recorded limits, health note — see §7), populated only in reply to `read_offsets`; `null` otherwise. See §6 — this is the "cheap to undo" mechanism, not the arm/disarm gate. |
 
 ## 4. Sequence numbers
@@ -105,18 +107,57 @@ is handled by construction rather than by "it'll never happen in practice."
 Receiver behavior: track the highest successfully-applied sequence number.
 An incoming packet is applied only if it is strictly newer by the
 wraparound-safe comparison; equal or older is a duplicate or a
-reordered/delayed packet that lost the race, and is silently dropped —
-not applied, not an error. This is the same "latest wins, stale is
-discarded" rule `MJPEGStream` already applies to frames, applied here to
-commands. A drop counter is kept for observability but a drop is expected
-UDP behavior, not a fault.
+reordered/delayed packet that lost the race, and is dropped — not
+applied, not an error. This is the same "latest wins, stale is discarded"
+rule `MJPEGStream` already applies to frames, applied here to commands.
+A drop is expected UDP behavior, not a fault.
+
+**Re-baseline after silence.** That rule alone assumed one PC counter for
+the life of the robot's boot, which is false the moment the GUI is
+restarted without power-cycling the robot: the new process starts at seq
+0, which is "older" than whatever the previous session reached, so every
+packet it will ever send is rejected. At the 10 Hz heartbeat, a previous
+session that ran for a minute leaves the next one dead for a minute; ten
+minutes leaves it dead for ten. This was a real, shipped bug — it
+presented as a permanently red LINK light with nothing logged anywhere,
+and cost a full debugging session with a purpose-built tool to find.
+
+So there is one exception: if the receiver has already been silent longer
+than `LINK_TIMEOUT_S`, the next valid packet is accepted regardless of its
+sequence number and becomes the new baseline. This is safe exactly where
+it triggers — the link is already past its timeout, so the failsafe has
+already fired and the robot is already in safe state; a peer arriving
+after that is a new session by definition, and there is nothing left for
+the stale check to protect. Inside an active stream, which is what the
+rule exists for, reordering and duplicates are rejected exactly as before.
+The receiver logs the re-baseline on serial (silence duration and the new
+baseline sequence), because it is a state change, not routine traffic.
+
+Known limitation, accepted rather than fixed: a straggler from the
+*previous* session arriving after a re-baseline still reads as "newer"
+than the new low baseline, moves it forward, and re-breaks the new session
+until the next timeout re-baselines again. That needs a packet delayed
+longer than the entire link timeout, which a LAN does not do. The real fix
+is a session id in the envelope — a wire-format change — not more
+cleverness in a comparison that only ever sees one number.
+
+**Drop counters.** The receiver keeps two cumulative counters since boot,
+both reported in telemetry (§3): `stale_drop_count` for packets rejected
+by the freshness rule above, and `malformed_drop_count` for packets that
+failed to decode at all. Together with `last_accepted_seq` they answer,
+from the GUI alone, the question a red link light cannot: are packets
+arriving and being discarded, or not arriving at all? An earlier version
+of this document claimed a drop counter was kept when none was — which is
+precisely why the bug above needed a serial cable and a firmware source
+read to diagnose.
 
 ## 5. Shared constants — decided: YAML source of truth, manual codegen
 
 `transport/constants.yaml` is the single source of truth for
 `protocol_version`, `sequence_bits`, `link_timeout_s`,
-`heartbeat_interval_s`, and `calibration_arm_timeout_s`. Regenerating
-`transport/generated_constants.py` (and, later, a firmware C header) is an
+`heartbeat_interval_s`, `calibration_arm_timeout_s`, and
+`bench_arm_timeout_s`. Regenerating `transport/generated_constants.py` and
+the firmware header `firmware/include/GeneratedConstants.h` is an
 explicit, manual command (`make gen-protocol` /
 `python scripts/gen_protocol_constants.py`) — deliberately **not** wired
 into any build step. On a one-month deadline with no firmware yet, a
@@ -542,6 +583,7 @@ out-of-range command cannot be built, let alone sent.
 | `bench_mode` | `armed` (bool) | arms/disarms `bench_pulse`/`record_limit`; independent of `calibration_mode` (§8) |
 | `bench_pulse` | `board` (int), `channel` (int), `pulse_us` (int), `servo_index` (int, optional) | `board ∈ {0x40, 0x41}`, `channel ∈ [0, 15]`, `pulse_us ∈ [500, 2500]`, `servo_index ∈ [0, 17]` if given; requires bench mode armed |
 | `record_limit` | `servo_index` (int), `bound` (`"min"`/`"max"`), `pulse_us` (int) | `servo_index ∈ [0, 17]`, `pulse_us ∈ [500, 2500]`; requires bench mode armed; converted to degrees from that servo's own neutral before storage (§7), rejected if that would make `min_deg_from_neutral >= max_deg_from_neutral` for that servo |
+| `bench_release` | `board` (int), `channel` (int) | `board ∈ {0x40, 0x41}`, `channel ∈ [0, 15]`; requires bench mode armed. Stops driving one channel entirely (no pulse at all), rather than commanding it to a position — what the Test Leg tab's RELEASE LEG button sends for each of its three joints. |
 | `bench_health_note` | `servo_index` (int), `note` (str) | `servo_index ∈ [0, 17]`, `note` ≤ 500 chars; not gated |
 | `ping` | — | — |
 
@@ -596,9 +638,18 @@ specific unit.
   the servo differs.
 - Recovery is automatic: the next valid, newer packet clears the fault bit
   and resumes normal operation. There is no separate "re-arm" step.
-- The PC-side link implementation applies the same freshness/newness rule
-  to inbound telemetry, so `RobotLink.is_connected` reflects "have we heard
-  from the robot recently," not just "is the socket open."
+- The PC-side link implementation applies the same newness rule to inbound
+  telemetry, but only to decide whether a packet *replaces the stored
+  telemetry content*. Liveness is deliberately separate: any receipt at all,
+  including a stale one, counts as proof of life, so `RobotLink.is_connected`
+  reflects "have we heard from the robot recently," not just "is the socket
+  open" — and not "did the newest thing we heard happen to be in order."
+- The mocks (`MockRobotLink`, `SimRobotLink`) implement the receiver's
+  freshness and re-baseline rules too, via `transport/link_watchdog.py`,
+  which mirrors firmware's `LinkWatchdog`. They previously modelled none of
+  it and accepted every packet unconditionally — which is why the §4
+  restart bug was invisible to the entire test suite until it reached real
+  hardware.
 
 ## Deliverables status
 
@@ -611,8 +662,14 @@ constants cross-check, and `wait_for_ack`/`send_and_wait`),
 gates independently, and the profile-merge-not-overwrite discipline §7
 depends on), `transport/constants.yaml` / `scripts/gen_protocol_constants.py`
 / `transport/generated_constants.py` for §5, an operator GUI (`app.py`,
-`ui/`) with Operate/Calibrate/Bench Test tabs, and `control/tracker.py` /
-`control/bench.py` for the AUTO_TRACK and bench dwell/sweep pure logic.
+`ui/`) with Operate/Calibrate/Bench Test/Test Leg tabs (plus a Simulator
+tab when the link is `sim`), `control/tracker.py` / `control/bench.py` /
+`control/single_leg.py` for the AUTO_TRACK, bench dwell/sweep and
+single-leg step-gating pure logic, `transport/link_watchdog.py` (the
+PC-side mirror of firmware's receive-side freshness rule, §4), and
+`tools/link_doctor.py`, a standalone layer-by-layer link diagnostic for
+when the GUI shows no link and a single red light isn't enough to say
+which layer is broken.
 Tests cover encode/decode round-trips for every command and telemetry
 (including the four bench commands), range rejection, malformed/wrong-
 version/unknown-type decode rejection, sequence wraparound and out-of-order
@@ -621,7 +678,7 @@ behavior including both arm gates and the limit/note merge-preservation
 guarantee, and the bench dwell-guard/sweep pure logic.
 
 Firmware (`firmware/`, ESP32-S3/PlatformIO) implements the full protocol:
-`bench_mode`/`bench_pulse`/`record_limit`/`bench_health_note`,
+`bench_mode`/`bench_pulse`/`bench_release`/`record_limit`/`bench_health_note`,
 `calibration_mode`/`calibrate`/`write_offsets`/`read_offsets`,
 `ping`, and — as of a later session than the one that first wrote most of
 this document — real gait/IK for `walk`/`turn`/`body_height`, converted
@@ -642,6 +699,10 @@ Section 7 for why. A `simulator/` package (`SimRobotLink`, a `RobotLink`
 implementation) runs the same gait engine over time on a background
 thread, for GUI-driven testing of gait/failsafe behavior with no hardware
 and no camera, selectable via `operator_config.yaml`'s `link.mode: sim`
-or `python app.py --link-mode sim`. Verified by real cross-compilation
-for the actual target and by unit tests; not verified against physical
-hardware, which no session so far has had access to.
+or `python app.py --link-mode sim`. Verified by real cross-compilation for
+the actual target and by unit tests. Hardware bring-up has since started:
+the ESP32 runs this firmware on a bench, and two real-hardware bugs found
+that way are fixed here — WiFi modem sleep (see `docs/HOW_TO_USE.md`'s
+link troubleshooting section) and the §4 sequence re-baseline. Nothing is
+mechanically assembled yet, so no gait output has been verified against
+physical servos.

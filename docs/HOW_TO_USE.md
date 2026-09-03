@@ -559,6 +559,34 @@ heartbeat interval itself (something like 9-10 *consecutive* dropped
 heartbeats would be needed to trip the failsafe), which is generous
 without being loose enough to hide a real problem.
 
+### The other one that looks like a wiring fault: LINK red right after restarting the app
+
+**Symptom:** `ping` works, `link_doctor` says the port isn't closed, but
+the robot answers nothing — 0/10 on step 4 — and it started right after
+you restarted the GUI (or ran `link_doctor` twice) without power-cycling
+the robot. Power-cycling the ESP32 "fixes" it, which makes it look like a
+firmware crash.
+
+**Cause:** the robot tracks the highest sequence number it has accepted
+and rejects anything older, so a restarted app — which begins numbering
+at zero again — was rejected until its counter climbed past wherever the
+previous session got to. A minute of previous session meant a minute of
+dead link, silently.
+
+**Fixed** (`firmware/lib/core/LinkWatchdog.cpp`): after the link has been
+silent longer than `LINK_TIMEOUT_S`, the next packet is accepted whatever
+its sequence number and becomes the new baseline. The robot logs
+`udp: new session after Nms silence, baselining at seq=X` on serial when
+this happens. In practice you'll never see the failure again; if you
+somehow do, wait two seconds and it clears itself.
+
+**How to tell these two apart from the GUI**, without a serial cable: the
+Operate tab's telemetry panel shows `drops: N stale, M malformed` and
+`robot last accepted seq`. Climbing `stale` drops mean packets are
+arriving and being rejected (a sequence problem). No drops at all and no
+telemetry means they aren't arriving (a network, address, or modem-sleep
+problem).
+
 ## If a servo buzzes, gets hot, or stops responding mid-session
 
 **Buzzing.** It's being asked to hold or reach a position it physically
