@@ -515,6 +515,50 @@ against the meter's reading, same ratio math.
 6. **Last resort: power-cycle the ESP32** (servo rail off, wait a few
    seconds, back on) and try again.
 
+If none of the above explains it, or the symptom doesn't quite match any
+of them, run `python tools/link_doctor.py <robot IP>` — a standalone
+script that tests each layer (host reachable, port open, firmware
+actually answering) independently and tells you which one is failing,
+instead of one red LINK light with no detail.
+
+### A specific, easy-to-misdiagnose failure: intermittent link, very high ping RTT
+
+**Symptom:** the link connects sometimes and not others — roughly a
+handful of successes out of dozens of attempts — and when you actually
+measure it (plain `ping`, or `tools/link_doctor.py`), the round-trip time
+on a successful attempt is hundreds of milliseconds, not the 1-10ms a
+local network should show. This looks like a wiring, address, or firewall
+problem (that's what the checklist above walks you toward), but it isn't
+— none of steps 1-6 fix it, because the address, wiring, and network are
+all fine.
+
+**Cause:** ESP32 WiFi modem sleep. The radio powers itself down between
+packets to save current, and takes hundreds of milliseconds to wake back
+up to receive the next one. Most packets arrive while the radio is
+asleep and are simply lost; the rare one that lands while it's briefly
+awake makes it through, but far too slowly, and usually too late for
+`LINK_TIMEOUT_S` (1 second) to still count it. `tools/link_doctor.py`
+sends several probes rather than one specifically to catch this pattern
+(intermittent success *and* high RTT together) and calls it out by name
+instead of just reporting a number or a pass/fail.
+
+**Fixed in firmware** (`firmware/src/WifiSetup.cpp`): `esp_wifi_set_ps(WIFI_PS_NONE)`
+is called once WiFi association succeeds, on both the normal station path
+and the AP-fallback path. This robot runs off mains power, never a
+battery, so there's no current-draw tradeoff being made — power save is
+simply off. If you see this exact symptom again, the most likely
+explanation is firmware older than this fix is flashed; check you're
+running current firmware before looking anywhere else.
+
+**Expected RTT once this is fixed:** roughly 1-10ms, typical for a local
+WiFi network with no modem sleep in the way. `LINK_TIMEOUT_S` (1.0s) and
+`HEARTBEAT_INTERVAL_S` (0.1s) were not changed to work around this — they
+didn't need to be. Against a ~1-10ms real RTT they already have roughly
+100x margin on a single round trip, and about 10x margin against the
+heartbeat interval itself (something like 9-10 *consecutive* dropped
+heartbeats would be needed to trip the failsafe), which is generous
+without being loose enough to hide a real problem.
+
 ## If a servo buzzes, gets hot, or stops responding mid-session
 
 **Buzzing.** It's being asked to hold or reach a position it physically
