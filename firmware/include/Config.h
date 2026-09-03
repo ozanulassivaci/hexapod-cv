@@ -118,7 +118,16 @@
 // --- Networking ---------------------------------------------------------
 
 #define ROBOT_UDP_PORT 9000  // matches operator_config.yaml's link.udp.robot_port
-#define UDP_RECV_BUFFER_SIZE 512
+// Sized from the largest legal command, measured rather than guessed:
+// write_offsets carrying all 18 servos encodes to 877 bytes, and
+// bench_health_note with a full HEALTH_NOTE_MAX_LEN note is 578 -- and up
+// to ~1078 if every character of that note is one JSON has to escape
+// (quote, backslash, newline). The previous 512 silently truncated both,
+// which decodeCommand then rejected as malformed with no reply: the
+// 18-servo calibration restore path could never have worked. 2048 covers
+// the escaped worst case with room to spare. A larger packet still fails
+// safely (truncated -> malformed -> counted, never an overrun).
+#define UDP_RECV_BUFFER_SIZE 2048
 #define WIFI_CONNECT_TIMEOUT_MS 15000  // how long to try STA before falling back to AP
 #define SERIAL_BAUD 115200
 

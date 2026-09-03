@@ -185,6 +185,13 @@ autosave. Export before you close, every time, if the session mattered.
     - **robot last accepted seq** far above what a freshly-started app
       would be sending is the same story from the other side. `none yet`
       means the robot has not accepted a single packet since it booted.
+  - **robot stack free** is how much stack headroom the robot's link task
+    has left, at its deepest point since *its* boot. Watch the trend, not
+    the number. If it falls toward zero the robot will eventually crash
+    and reboot mid-packet, which from here looks exactly like a dead
+    link rather than like a crash — this firmware has done that once, and
+    the number is here so the next one is visible in advance. `n/a` is
+    normal against mock or sim; neither has a stack worth reporting.
 - **WASD / arrow keys.** Walk. Holding a key keeps walking; releasing it
   stops. Two keys at once (like W+D) walks diagonally. Get it wrong and the
   robot walks the wrong direction — release the key, it stops immediately.

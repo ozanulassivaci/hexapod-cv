@@ -856,6 +856,17 @@ class Telemetry:
     # this process is currently sending means the robot is rejecting
     # everything as stale (see transport/link_watchdog.py).
     last_accepted_seq: int | None = None
+    # Free stack in bytes on the task servicing the link, at its deepest
+    # point since the robot booted (uxTaskGetStackHighWaterMark). None
+    # when the reporter has no meaningful stack of its own -- both mocks
+    # run on a Python thread with an unbounded-by-comparison stack, so
+    # reporting a number there would be inventing one.
+    #
+    # Watch it trend, not its absolute value. A stack overflow on this
+    # firmware is not a graceful failure: it reboots the board mid-packet,
+    # which from the PC looks exactly like a dead link. This field exists
+    # so that becomes visible as a number approaching zero first.
+    stack_free_bytes: int | None = None
 
 
 def encode_telemetry(telemetry: Telemetry) -> bytes:
@@ -878,6 +889,7 @@ def encode_telemetry(telemetry: Telemetry) -> bytes:
         "stale_drop_count": telemetry.stale_drop_count,
         "malformed_drop_count": telemetry.malformed_drop_count,
         "last_accepted_seq": telemetry.last_accepted_seq,
+        "stack_free_bytes": telemetry.stack_free_bytes,
         "last_applied": (
             {"type": telemetry.last_applied.TYPE.value, **telemetry.last_applied._wire_fields()}
             if telemetry.last_applied is not None
@@ -944,6 +956,14 @@ def decode_telemetry(data: bytes) -> Telemetry:
     if last_accepted_seq is not None:
         last_accepted_seq = _require_seq(last_accepted_seq)
 
+    stack_free_bytes = payload.get("stack_free_bytes")
+    if stack_free_bytes is not None and (
+        not isinstance(stack_free_bytes, int)
+        or isinstance(stack_free_bytes, bool)
+        or stack_free_bytes < 0
+    ):
+        raise ProtocolError(f"invalid stack_free_bytes: {stack_free_bytes!r}")
+
     error = payload.get("error")
     if error is not None and not isinstance(error, str):
         raise ProtocolError(f"error must be a string or null, got {error!r}")
@@ -989,6 +1009,7 @@ def decode_telemetry(data: bytes) -> Telemetry:
         stale_drop_count=stale_drop_count,
         malformed_drop_count=malformed_drop_count,
         last_accepted_seq=last_accepted_seq,
+        stack_free_bytes=stack_free_bytes,
         last_applied=last_applied,
         profiles=profiles,
     )

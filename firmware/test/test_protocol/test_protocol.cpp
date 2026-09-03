@@ -367,18 +367,25 @@ void test_encode_telemetry_with_last_applied_walk(void) {
 }
 
 void test_encode_telemetry_with_profiles(void) {
-    Telemetry t;
-    t.hasProfiles = true;
+    // Telemetry borrows the profile table rather than containing it --
+    // static here for the same reason main.cpp's is: 18 inline
+    // ServoProfiles are 9432 bytes, more than a task stack. See
+    // Protocol.h's lifetime note.
+    static ServoProfile profileTable[SERVO_COUNT];
     for (uint8_t i = 0; i < SERVO_COUNT; ++i) {
-        t.profiles[i] = ServoProfile::defaultFor(i);
+        profileTable[i] = ServoProfile::defaultFor(i);
     }
-    t.profiles[3].offsetUs = 20;
-    t.profiles[3].sign = -1;
-    t.profiles[3].hasMinDeg = true;
-    t.profiles[3].minDegFromNeutral = -49.5f;
-    std::strncpy(t.profiles[3].note, "buzzes", sizeof(t.profiles[3].note) - 1);
+    profileTable[3].offsetUs = 20;
+    profileTable[3].sign = -1;
+    profileTable[3].hasMinDeg = true;
+    profileTable[3].minDegFromNeutral = -49.5f;
+    std::strncpy(profileTable[3].note, "buzzes", sizeof(profileTable[3].note) - 1);
 
-    uint8_t buf[4096];
+    Telemetry t;
+    t.profiles = profileTable;
+    t.profileCount = SERVO_COUNT;
+
+    static uint8_t buf[4096];
     size_t len = encodeTelemetry(t, buf, sizeof(buf));
     TEST_ASSERT_GREATER_THAN(0, len);
 

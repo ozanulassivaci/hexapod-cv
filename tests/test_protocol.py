@@ -535,3 +535,28 @@ def test_sequence_far_older_is_not_newer():
 def test_next_sequence_wraps_at_modulus():
     assert next_sequence(SEQUENCE_MODULUS - 1) == 0
     assert next_sequence(0) == 1
+
+
+def test_stack_free_bytes_round_trips_and_defaults_to_none():
+    # Nullable on purpose: only real firmware has a stack worth reporting.
+    # A mock reporting 0 would read as "about to overflow"; None reads as
+    # "not applicable", which is the truth.
+    base = dict(
+        seq_echo=1, ok=True, error=None, fault_flags=0, gait_phase=None, rail_mv=None,
+        link_timeout_s=1.0, calibration_armed=False, bench_armed=False,
+        robot_assembled=False, last_applied=None, profiles=None,
+    )
+    assert decode_telemetry(encode_telemetry(Telemetry(**base))).stack_free_bytes is None
+    t = Telemetry(**base, stack_free_bytes=3072)
+    assert decode_telemetry(encode_telemetry(t)).stack_free_bytes == 3072
+
+
+def test_negative_stack_free_bytes_is_rejected():
+    payload = json.loads(encode_telemetry(Telemetry(
+        seq_echo=1, ok=True, error=None, fault_flags=0, gait_phase=None, rail_mv=None,
+        link_timeout_s=1.0, calibration_armed=False, bench_armed=False,
+        robot_assembled=False, last_applied=None, profiles=None,
+    )))
+    payload["stack_free_bytes"] = -1
+    with pytest.raises(ProtocolError, match="stack_free_bytes"):
+        decode_telemetry(json.dumps(payload).encode())

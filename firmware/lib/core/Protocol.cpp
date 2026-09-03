@@ -456,6 +456,11 @@ size_t encodeTelemetry(const Telemetry& t, uint8_t* outBuf, size_t outBufLen) {
     } else {
         doc["last_accepted_seq"] = nullptr;
     }
+    if (t.hasStackFreeBytes) {
+        doc["stack_free_bytes"] = t.stackFreeBytes;
+    } else {
+        doc["stack_free_bytes"] = nullptr;
+    }
 
     if (t.hasLastApplied) {
         JsonObject la = doc["last_applied"].to<JsonObject>();
@@ -464,9 +469,9 @@ size_t encodeTelemetry(const Telemetry& t, uint8_t* outBuf, size_t outBufLen) {
         doc["last_applied"] = nullptr;
     }
 
-    if (t.hasProfiles) {
+    if (t.profiles != nullptr) {
         JsonArray arr = doc["profiles"].to<JsonArray>();
-        for (uint8_t i = 0; i < SERVO_COUNT; ++i) {
+        for (uint8_t i = 0; i < t.profileCount; ++i) {
             const ServoProfile& p = t.profiles[i];
             JsonObject entry = arr.add<JsonObject>();
             entry["servo_index"] = p.servoIndex;

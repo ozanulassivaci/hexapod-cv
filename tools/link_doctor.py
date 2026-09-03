@@ -68,6 +68,10 @@ _GARBAGE_PROBES_PER_RUN = 2
 # deliberately well above normal jitter before warning, and set high
 # enough at the top end that only a real modem-sleep-scale wake delay
 # (hundreds of ms) trips it -- see the module docstring.
+# Below this much free stack on the robot, say so. Not a cliff -- just far
+# enough into the 8KB loopTask stack that the trend matters.
+_STACK_FREE_WARN_BYTES = 1024
+
 _RTT_ELEVATED_MS = 50.0
 _RTT_MODEM_SLEEP_MS = 200.0
 
@@ -375,6 +379,15 @@ def check_ping(host: str, robot_port: int, listen_port: int, attempts: int = _PI
         f"stale_drops={t.stale_drop_count}  malformed_drops={t.malformed_drop_count}  "
         f"robot_last_accepted_seq={t.last_accepted_seq}"
     )
+    if t.stack_free_bytes is not None:
+        _info(f"robot stack free (deepest since its boot) = {t.stack_free_bytes} bytes")
+        if t.stack_free_bytes < _STACK_FREE_WARN_BYTES:
+            _warn(
+                f"only {t.stack_free_bytes} bytes of stack headroom left on the robot's link task. "
+                "An overflow there is not graceful -- it reboots the board mid-packet, which from "
+                "here looks exactly like a dead link (this firmware has done precisely that). Worth "
+                "investigating before it becomes a reboot loop."
+            )
     if t.stale_drop_count > 0:
         _warn(
             f"the robot has rejected {t.stale_drop_count} packet(s) as out-of-order since it booted "

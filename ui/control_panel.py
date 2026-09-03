@@ -139,6 +139,13 @@ class ControlPanel(QWidget):
         # transport/link_watchdog.py.
         self._drops_label = QLabel("drops: 0 stale, 0 malformed")
         self._last_seq_label = QLabel("robot last accepted seq: n/a")
+        # Free stack on the robot's link task at its deepest point since
+        # its boot. Shown because the failure mode it warns about is not
+        # graceful: an overflow reboots the board mid-packet, which from
+        # here is indistinguishable from a dead link. A number trending
+        # toward zero is the warning; "n/a" is normal against a mock,
+        # which has no comparable stack to report.
+        self._stack_label = QLabel("robot stack free: n/a")
         for label in (
             self._rtt_label,
             self._last_applied_label,
@@ -148,6 +155,7 @@ class ControlPanel(QWidget):
             self._joint_clip_label,
             self._drops_label,
             self._last_seq_label,
+            self._stack_label,
         ):
             label.setFocusPolicy(Qt.NoFocus)
             layout.addWidget(label)
@@ -276,6 +284,7 @@ class ControlPanel(QWidget):
             self._joint_clip_label.setText("joint clip: n/a")
             self._drops_label.setText("drops: n/a")
             self._last_seq_label.setText("robot last accepted seq: n/a")
+            self._stack_label.setText("robot stack free: n/a")
             self.set_safety_mode(None)
             return
 
@@ -299,6 +308,11 @@ class ControlPanel(QWidget):
         self._last_seq_label.setText(
             f"robot last accepted seq: {last_seq}" if last_seq is not None
             else "robot last accepted seq: none yet"
+        )
+        stack_free = telemetry.stack_free_bytes
+        self._stack_label.setText(
+            f"robot stack free: {stack_free} bytes" if stack_free is not None
+            else "robot stack free: n/a"
         )
         self.set_safety_mode(telemetry.robot_assembled)
 

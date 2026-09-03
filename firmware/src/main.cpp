@@ -79,6 +79,45 @@ static bool udpLogEnabled = true;
 // Section 4.
 static uint32_t malformedDropCount = 0;
 
+// Staging area for a read_offsets reply's profile table. Module-level,
+// not a Telemetry member and not a local: 18 x sizeof(ServoProfile) is
+// 9432 bytes, which is more than loopTask's entire 8KB stack. Telemetry
+// borrows a pointer to this (see Protocol.h's lifetime note).
+static ServoProfile profileScratch[SERVO_COUNT];
+
+// Telemetry encode buffer. Static, not a local, for the same reason.
+//
+// Size is measured, not guessed: the largest legal telemetry is a
+// read_offsets reply carrying all 18 profiles with full-length
+// (HEALTH_NOTE_MAX_LEN = 500 char) notes, which encodes to 11,766 bytes
+// of JSON. The previous 4096 could not hold that -- encodeTelemetry
+// returned 0 and the robot silently answered nothing, which is a real
+// bug this sizing fixes, not just a stack fix. 12288 leaves ~4% headroom
+// over the measured worst case.
+//
+// Notes containing characters JSON must escape (quote, backslash,
+// newline) can exceed this. That fails gracefully rather than
+// dangerously: serializeJson() is bounded by the buffer length and
+// encodeTelemetry() returns 0, which sendTelemetry() now logs. It
+// cannot overrun.
+static constexpr size_t kTelemetryBufferBytes = 12288;
+static uint8_t telemetryBuffer[kTelemetryBufferBytes];
+// The dominant term is the profile table: 18 notes at 500 chars each plus
+// roughly 110 bytes of surrounding JSON per profile. Compile-time check so
+// a future change to SERVO_COUNT or HEALTH_NOTE_MAX_LEN can't silently
+// outgrow the buffer and reintroduce a read_offsets reply that never sends.
+static_assert(kTelemetryBufferBytes >= SERVO_COUNT * (HEALTH_NOTE_MAX_LEN + 110) + 512,
+              "telemetry buffer too small for a full read_offsets reply");
+static_assert(UDP_RECV_BUFFER_SIZE >= SERVO_COUNT * 48 + 128,
+              "rx buffer too small for an 18-servo write_offsets command");
+static_assert(UDP_RECV_BUFFER_SIZE >= HEALTH_NOTE_MAX_LEN * 2 + 128,
+              "rx buffer too small for a fully-escaped bench_health_note");
+
+// Free stack on this task at its deepest point since boot, sampled once
+// per loop() and reported in telemetry. Zero until the first sample.
+static uint32_t stackFreeBytes = 0;
+static uint32_t stackFreeLowWaterReported = UINT32_MAX;
+
 static MotionState lastMotion;
 static bool hasMotion = false;
 static uint32_t faultFlags = 0;
@@ -244,9 +283,10 @@ static void handleCommand(const Command& cmd, uint32_t seq, Telemetry& out) {
         }
 
         case CommandType::ReadOffsets: {
-            out.hasProfiles = true;
+            out.profiles = profileScratch;
+            out.profileCount = SERVO_COUNT;
             for (uint8_t i = 0; i < SERVO_COUNT; ++i) {
-                out.profiles[i] = profileStore.get(i);
+                profileScratch[i] = profileStore.get(i);
             }
             break;
         }
@@ -413,17 +453,18 @@ static void sendTelemetry(const Telemetry& t) {
         if (udpLogEnabled) Serial.println("tx SKIP no return address yet");
         return;
     }
-    uint8_t buf[4096];
-    size_t len = encodeTelemetry(t, buf, sizeof(buf));
+    size_t len = encodeTelemetry(t, telemetryBuffer, sizeof(telemetryBuffer));
     if (len == 0) {
         // Encode overflowed the buffer above (a full 18-servo profile dump
         // is the only realistic way) -- silently sending nothing looks
         // exactly like a dead link from the PC, so say so.
-        if (udpLogEnabled) Serial.println("tx FAIL encodeTelemetry returned 0 (buffer too small?)");
+        // Bounded by the buffer length, so this is a truncation, never
+        // an overrun -- see kTelemetryBufferBytes.
+        Serial.println("tx FAIL encodeTelemetry did not fit the telemetry buffer");
         return;
     }
     udp.beginPacket(pcAddr, pcPort);
-    udp.write(buf, len);
+    udp.write(telemetryBuffer, len);
     bool sent = udp.endPacket() == 1;
     if (udpLogEnabled) {
         Serial.print(sent ? "tx " : "tx FAIL ");
@@ -460,6 +501,8 @@ static void buildBaseTelemetry(Telemetry& t) {
     // sequence number and can't double as "nothing yet".
     t.hasLastAcceptedSeq = linkWatchdog.hasEverReceivedPacket();
     t.lastAcceptedSeq = linkWatchdog.lastAcceptedSeq();
+    t.hasStackFreeBytes = stackFreeBytes > 0;
+    t.stackFreeBytes = stackFreeBytes;
 }
 
 // --- UDP -----------------------------------------------------------------
@@ -698,6 +741,30 @@ static void processSerial() {
     processSerialLine(line);
 }
 
+// --- stack headroom ------------------------------------------------------
+//
+// uxTaskGetStackHighWaterMark returns the smallest amount of free stack
+// this task has ever had, in bytes on ESP-IDF (vanilla FreeRTOS returns
+// words -- ESP-IDF does not). Sampled every loop() and reported in
+// telemetry, plus a serial line whenever it reaches a new low.
+//
+// This exists because the alternative way of discovering a stack problem
+// is the one that actually happened: a 9636-byte Telemetry declared as a
+// local on an 8192-byte stack, crashing on the first packet with a
+// corrupted backtrace and no indication which buffer was responsible.
+// A number that trends toward zero is visible before it becomes a
+// reboot loop.
+
+static void sampleStackHeadroom() {
+    stackFreeBytes = static_cast<uint32_t>(uxTaskGetStackHighWaterMark(nullptr));
+    if (stackFreeBytes < stackFreeLowWaterReported) {
+        stackFreeLowWaterReported = stackFreeBytes;
+        Serial.print("stack: new low-water mark, ");
+        Serial.print(stackFreeBytes);
+        Serial.println(" bytes free on loopTask");
+    }
+}
+
 // --- setup / loop ----------------------------------------------------
 
 void setup() {
@@ -734,6 +801,13 @@ void setup() {
 
     Serial.print("boot: safe state (all channels released), watchdog untripped-since-boot, safety_mode=");
     Serial.println(ROBOT_ASSEMBLED ? "assembled (hold on fault)" : "bench (release on fault)");
+    sampleStackHeadroom();
+    Serial.print("boot: telemetry buffer ");
+    Serial.print(kTelemetryBufferBytes);
+    Serial.print("B, rx buffer ");
+    Serial.print(UDP_RECV_BUFFER_SIZE);
+    Serial.print("B, sizeof(Telemetry)=");
+    Serial.println(sizeof(Telemetry));
 }
 
 void loop() {
@@ -808,6 +882,10 @@ void loop() {
         faultFlags &= ~FAULT_SERVO_FAULT_BIT;
         faultFlags &= ~FAULT_IK_CLIP_BIT;
     }
+
+    // After the deepest work this task does (processUdp -> handleCommand
+    // -> sendTelemetry), so the watermark reflects a real peak.
+    sampleStackHeadroom();
 
     delay(CONTROL_LOOP_INTERVAL_MS);
 }

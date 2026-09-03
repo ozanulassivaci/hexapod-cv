@@ -136,11 +136,50 @@ struct Telemetry {
     uint32_t malformedDropCount = 0;
     bool hasLastAcceptedSeq = false;
     uint32_t lastAcceptedSeq = 0;
+    // Free stack (bytes) on the task that services the link, at its
+    // deepest point since boot -- uxTaskGetStackHighWaterMark. Null when
+    // the reporter has no meaningful stack of its own (both mocks).
+    bool hasStackFreeBytes = false;
+    uint32_t stackFreeBytes = 0;
     bool hasLastApplied = false;
     MotionState lastApplied;
-    bool hasProfiles = false;
-    ServoProfile profiles[SERVO_COUNT];
+    // Borrowed, NOT owned, and deliberately not an inline array: 18
+    // inline ServoProfiles made sizeof(Telemetry) 9636 bytes, which
+    // overflowed loopTask's 8KB stack the instant anyone declared one as
+    // a local -- which processUdp() did, on every packet. As a pointer
+    // this struct is ~200 bytes and safe to keep on the stack, and the
+    // profile data is no longer copied at all.
+    //
+    // Lifetime rule: whatever this points at must outlive the
+    // encodeTelemetry() call. The only producer is main.cpp, pointing at
+    // a module-level array; this codebase is single-task and cooperative
+    // (see main.cpp's header), so there is nothing to race with.
+    // nullptr means "no profiles in this reply", so a stale has-flag
+    // cannot outlive the data it describes.
+    const ServoProfile* profiles = nullptr;
+    uint8_t profileCount = 0;
 };
+
+// Stack-safety budget, enforced at compile time in both the native and
+// target builds.
+//
+// This exists because of a real crash: Telemetry once contained
+// ServoProfile profiles[18] inline, making it 9636 bytes, and
+// main.cpp's processUdp() declared one as a local. loopTask's stack on
+// Arduino-ESP32 is 8192 bytes, so the first packet to arrive overflowed
+// it and rebooted the board, forever. Nothing caught it -- host and
+// native builds have megabytes of stack and megabytes of it to spare, so
+// no test could ever have failed.
+//
+// A size limit is the part of that which *is* checkable off-target: the
+// struct sizes are compile-time constants, and these bounds are chosen to
+// be comfortable for a stack local while leaving no room to quietly
+// reintroduce an inline table. If one of these fires, the fix is to
+// borrow the large data by pointer (as `profiles` does) rather than to
+// raise the bound.
+static_assert(sizeof(Telemetry) <= 512, "Telemetry must stay small enough to be a stack local");
+static_assert(sizeof(Command) <= 1024, "Command must stay small enough to be a stack local");
+static_assert(sizeof(DecodeResult) <= 1024, "DecodeResult must stay small enough to be a stack local");
 
 // Writes JSON into outBuf (NOT null-terminated beyond what snprintf-style
 // buffers guarantee -- use the returned length, don't strlen()). Returns 0
