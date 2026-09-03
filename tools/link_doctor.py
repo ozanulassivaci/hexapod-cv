@@ -13,14 +13,27 @@ clean ping reply here proves the protocol layer works end to end, not just
 failure, says what that specific result does and doesn't rule out; there
 is no stack trace in the normal-failure path, only in a genuine bug in
 this script.
+
+Steps 2 and 4 send several probes, not one, and report round-trip time
+explicitly. A single probe can get lucky: this project's own real-hardware
+link once passed roughly 2 times in 50 attempts, at 883ms RTT when it did
+-- indistinguishable from "it just works" on a single try, and
+indistinguishable from "it's dead" on an unlucky one. That specific
+profile (mostly no reply, occasional very slow reply) is the signature of
+ESP32 WiFi modem sleep -- the radio powers down between packets and takes
+hundreds of ms to wake -- and is flagged explicitly, not just reported as
+a number, since it's easy to read past a big RTT if the step still says
+OK. See docs/HOW_TO_USE.md's link troubleshooting section.
 """
 
 import argparse
 import pathlib
+import re
 import socket
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -36,13 +49,26 @@ from transport.protocol import (  # noqa: E402
     FAULT_SERVO_FAULT,
     PingCommand,
     ProtocolError,
+    Telemetry,
     decode_telemetry,
     encode_command,
     has_fault,
 )
 
-_PING_TIMEOUT_S = 2.0
+_PING_TIMEOUT_S = 2.0  # per-probe wait in step 4 -- generous on purpose, see main()'s docstring note
 _PROBE_TIMEOUT_S = 1.5
+_PING_ATTEMPTS = 10
+_ICMP_PING_COUNT = 5
+
+# A healthy LAN round trip is roughly 1-10ms. These thresholds are
+# deliberately well above normal jitter before warning, and set high
+# enough at the top end that only a real modem-sleep-scale wake delay
+# (hundreds of ms) trips it -- see the module docstring.
+_RTT_ELEVATED_MS = 50.0
+_RTT_MODEM_SLEEP_MS = 200.0
+
+_RTT_SUMMARY_RE = re.compile(r"=\s*([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)\s*ms")
+_LOSS_RE = re.compile(r"(\d+)% packet loss")
 
 _FAULT_NAMES = [
     (FAULT_LINK_TIMEOUT, "LINK_TIMEOUT"),
@@ -61,6 +87,22 @@ def _fault_flags_text(fault_flags: int) -> str:
     if unknown:
         names.append(f"unknown(0x{unknown:x})")
     return ", ".join(names) if names else f"0x{fault_flags:x}"
+
+
+def _rtt_note(rtt_ms: float) -> str | None:
+    if rtt_ms >= _RTT_MODEM_SLEEP_MS:
+        return (
+            f"{rtt_ms:.0f}ms is far past normal LAN latency (expect roughly 1-10ms) and matches the "
+            "signature of ESP32 WiFi modem sleep: the radio powers down between packets and takes "
+            "hundreds of ms to wake for the next one. See docs/HOW_TO_USE.md's link troubleshooting "
+            "section -- the fix is esp_wifi_set_ps(WIFI_PS_NONE) in firmware, not anything on the PC side."
+        )
+    if rtt_ms >= _RTT_ELEVATED_MS:
+        return (
+            f"{rtt_ms:.0f}ms is higher than a healthy LAN should show (expect roughly 1-10ms) -- short "
+            "of the modem-sleep range, but worth a second look."
+        )
+    return None
 
 
 def _step(n: int, title: str) -> None:
@@ -117,39 +159,59 @@ def check_config(host: str, config_path: str) -> None:
         )
 
 
-def check_reachable(host: str) -> bool:
-    _step(2, f"is {host} reachable at all (ICMP ping)")
+def check_reachable(host: str, count: int = _ICMP_PING_COUNT) -> bool:
+    _step(2, f"is {host} reachable at all ({count}x ICMP ping)")
     try:
         result = subprocess.run(
-            ["ping", "-c", "1", "-W", "2", host],
+            ["ping", "-c", str(count), "-W", "2", host],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=count * 3 + 5,
         )
     except FileNotFoundError:
         _warn("no `ping` binary found on this system -- skipping, can't rule this layer out")
         return True  # unknown, don't block later steps on a missing tool
     except subprocess.TimeoutExpired:
-        _fail(f"ping to {host} did not return within 5s")
+        _fail(f"ping to {host} did not return in time")
         return False
 
-    if result.returncode == 0:
-        _ok(f"{host} responds to ping")
-        for line in result.stdout.splitlines():
-            if "time=" in line:
-                _info(line.strip())
+    loss_match = _LOSS_RE.search(result.stdout)
+    loss_pct = int(loss_match.group(1)) if loss_match else None
+    rtt_match = _RTT_SUMMARY_RE.search(result.stdout)
+
+    if loss_pct == 100 or rtt_match is None and result.returncode != 0:
+        _fail(f"{host} did not respond to any of {count} pings")
+        tail = (result.stdout.strip() or result.stderr.strip()).splitlines()
+        for line in tail[-3:]:
+            _info(line)
+        _info(
+            "if the robot is genuinely powered on with this IP, this usually means: wrong address, a "
+            "different subnet/VLAN (common on WiFi with client isolation), or it isn't on this network "
+            "right now. Nothing past this layer can work until this passes -- fix this first."
+        )
+        return False
+
+    if rtt_match is None:
+        _warn(f"{host} responded to some pings, but couldn't parse the RTT summary; raw output below")
+        _info(result.stdout.strip())
         return True
 
-    _fail(f"{host} did not respond to ping (exit code {result.returncode})")
-    tail = (result.stdout.strip() or result.stderr.strip()).splitlines()
-    for line in tail[-3:]:
-        _info(line)
-    _info(
-        "if the robot is genuinely powered on with this IP, this usually means: wrong address, a "
-        "different subnet/VLAN (common on WiFi with client isolation), or it isn't on this network "
-        "right now. Nothing past this layer can work until this passes -- fix this first."
-    )
-    return False
+    rtt_min, rtt_avg, rtt_max, _mdev = (float(x) for x in rtt_match.groups())
+    summary = f"min/avg/max = {rtt_min:.0f}/{rtt_avg:.0f}/{rtt_max:.0f} ms"
+    if loss_pct:
+        _warn(f"{loss_pct}% packet loss over {count} pings ({summary})")
+    else:
+        _ok(f"{host} responds to all {count} pings ({summary})")
+
+    note = _rtt_note(rtt_max)
+    if note:
+        _warn(note)
+    elif loss_pct:
+        _info(
+            "packet loss without a high RTT doesn't match the modem-sleep signature by itself -- "
+            "step 4 below is the more informative test either way."
+        )
+    return True
 
 
 def probe_udp_port(host: str, robot_port: int, listen_port: int) -> bool | None:
@@ -196,7 +258,7 @@ def probe_udp_port(host: str, robot_port: int, listen_port: int) -> bool | None:
         _info(
             "this alone doesn't prove firmware is healthy, only that the port isn't flatly closed. "
             "A firewall that silently drops instead of rejecting looks identical -- step 4 is the "
-            "real test of whether firmware actually answers."
+            "real test of whether firmware actually answers, and how reliably."
         )
         return True
     except OSError as exc:
@@ -206,8 +268,18 @@ def probe_udp_port(host: str, robot_port: int, listen_port: int) -> bool | None:
         sock.close()
 
 
-def check_ping(host: str, robot_port: int, listen_port: int):
-    _step(4, f"real PingCommand to {host}:{robot_port}, using this project's own encode/decode code")
+@dataclass
+class PingResult:
+    telemetry: Telemetry | None
+    successes: int
+    attempts: int
+    rtt_min_ms: float | None
+    rtt_avg_ms: float | None
+    rtt_max_ms: float | None
+
+
+def check_ping(host: str, robot_port: int, listen_port: int, attempts: int = _PING_ATTEMPTS) -> PingResult | None:
+    _step(4, f"{attempts}x real PingCommand to {host}:{robot_port}, using this project's own encode/decode code")
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.bind(("0.0.0.0", listen_port))
@@ -216,61 +288,85 @@ def check_ping(host: str, robot_port: int, listen_port: int):
         return None
     sock.settimeout(_PING_TIMEOUT_S)
 
-    data = encode_command(PingCommand(), seq=0)
-    try:
-        sock.sendto(data, (host, robot_port))
-    except OSError as exc:
-        _fail(f"send failed: {exc}")
-        sock.close()
-        return None
-    _info(f"sent PingCommand (seq=0, {len(data)} bytes) from local port {listen_port}")
+    rtts_ms: list[float] = []
+    last_telemetry: Telemetry | None = None
+    decode_error: str | None = None
+    last_reply: bytes | None = None
+    for seq in range(attempts):
+        data = encode_command(PingCommand(), seq=seq)
+        sent_at = time.monotonic()
+        try:
+            sock.sendto(data, (host, robot_port))
+            reply, _addr = sock.recvfrom(65535)
+        except socket.timeout:
+            continue
+        except OSError as exc:
+            _fail(f"send/recv failed on attempt {seq}: {exc}")
+            sock.close()
+            return None
+        rtts_ms.append((time.monotonic() - sent_at) * 1000.0)
+        try:
+            last_telemetry = decode_telemetry(reply)
+        except ProtocolError as exc:
+            decode_error = str(exc)
+            last_reply = reply
+            break
+        time.sleep(0.05)  # a small gap between probes, not a tight flood
+    sock.close()
 
-    try:
-        reply, addr = sock.recvfrom(65535)
-    except socket.timeout:
-        _fail(f"no reply within {_PING_TIMEOUT_S}s")
-        _info(
-            "the packet left this machine with no send error, and nothing came back. If step 3 saw "
-            "no ICMP-unreachable, this now points at one of: firmware receiving the packet but "
-            "failing to decode it (check the robot's serial log for anything logged when this arrived "
-            "-- decodeCommand() drops a malformed packet silently, with no reply and no telemetry), or "
-            "a reply being sent but blocked on the way back -- a firewall on THIS machine that allows "
-            f"outbound UDP but blocks unsolicited inbound on port {listen_port} looks exactly like "
-            "this. Check the PC's firewall rules for inbound UDP on that port."
-        )
-        sock.close()
-        return None
-    except OSError as exc:
-        _fail(f"recv failed: {exc}")
-        sock.close()
-        return None
+    successes = len(rtts_ms)
+    _info(f"{successes}/{attempts} replies received")
 
-    _ok(f"got {len(reply)} bytes back from {addr[0]}:{addr[1]}")
-    if addr[0] != host:
-        _warn(f"reply came from {addr[0]}, not the address you pinged ({host}) -- unexpected on a simple LAN")
-
-    try:
-        telemetry = decode_telemetry(reply)
-    except ProtocolError as exc:
-        _fail(f"reply arrived, but this project's own decode_telemetry() rejected it: {exc}")
-        _info(f"raw bytes: {reply!r}")
+    if decode_error is not None:
+        _fail(f"a reply arrived, but this project's own decode_telemetry() rejected it: {decode_error}")
+        _info(f"raw bytes: {last_reply!r}")
         _info(
             "this is specifically the 'firmware is answering but the GUI can't read it' case -- the "
             "GUI calls this exact function on every packet, so it would fail identically. Compare "
             "transport/protocol.py's encode_telemetry()/decode_telemetry() against firmware/lib/core/"
             "Protocol.cpp's encodeTelemetry() for a field name or type mismatch."
         )
-        sock.close()
         return None
 
-    _ok("decoded cleanly with the same decode_telemetry() the GUI uses -- protocol layer works end to end")
-    _info(f"seq_echo={telemetry.seq_echo}  ok={telemetry.ok}  error={telemetry.error}")
-    _info(f"fault_flags={_fault_flags_text(telemetry.fault_flags)}")
-    _info(f"link_timeout_s={telemetry.link_timeout_s}  robot_assembled={telemetry.robot_assembled}")
-    _info(f"calibration_armed={telemetry.calibration_armed}  bench_armed={telemetry.bench_armed}")
-    _info(f"ik_clip_count={telemetry.ik_clip_count}  joint_clip_count={telemetry.joint_clip_count}")
-    sock.close()
-    return telemetry
+    if successes == 0:
+        _fail(f"no reply in any of {attempts} attempts ({_PING_TIMEOUT_S}s timeout each)")
+        _info(
+            "every packet left this machine with no send error, and nothing came back, not even once. "
+            "If step 3 saw no ICMP-unreachable, this points at: firmware receiving packets but failing "
+            "to decode them (check the robot's serial log -- decodeCommand() drops a malformed packet "
+            "silently, no reply, no telemetry), or replies being sent but blocked on the way back here "
+            f"-- a firewall on this machine blocking unsolicited inbound UDP on port {listen_port} "
+            "looks exactly like this."
+        )
+        return PingResult(None, 0, attempts, None, None, None)
+
+    rtt_min, rtt_avg, rtt_max = min(rtts_ms), sum(rtts_ms) / len(rtts_ms), max(rtts_ms)
+    _info(f"RTT over {successes} successful replies: min/avg/max = {rtt_min:.0f}/{rtt_avg:.0f}/{rtt_max:.0f} ms")
+
+    note = _rtt_note(rtt_max)
+    if successes < attempts and note:
+        loss_pct = 100 * (attempts - successes) / attempts
+        _fail(
+            f"{loss_pct:.0f}% of pings got no reply at all, and the ones that did took up to "
+            f"{rtt_max:.0f}ms -- this is an intermittent-high-latency pattern, not a clean pass or a "
+            "clean failure."
+        )
+        _info(note)
+    elif note:
+        _warn(note)
+    elif successes < attempts:
+        loss_pct = 100 * (attempts - successes) / attempts
+        _warn(f"{loss_pct:.0f}% of pings got no reply, even though RTT looks normal -- worth a second run")
+    else:
+        _ok("decoded cleanly every time, with the same decode_telemetry() the GUI uses -- protocol layer works end to end")
+
+    t = last_telemetry
+    _info(f"seq_echo={t.seq_echo}  ok={t.ok}  error={t.error}")
+    _info(f"fault_flags={_fault_flags_text(t.fault_flags)}")
+    _info(f"link_timeout_s={t.link_timeout_s}  robot_assembled={t.robot_assembled}")
+    _info(f"calibration_armed={t.calibration_armed}  bench_armed={t.bench_armed}")
+    _info(f"ik_clip_count={t.ik_clip_count}  joint_clip_count={t.joint_clip_count}")
+    return PingResult(last_telemetry, successes, attempts, rtt_min, rtt_avg, rtt_max)
 
 
 def main() -> int:
@@ -289,8 +385,7 @@ def main() -> int:
 
     check_config(args.host, args.config)
 
-    reachable = check_reachable(args.host)
-    if not reachable:
+    if not check_reachable(args.host):
         print("\n=== VERDICT: host unreachable -- fix that before anything else here matters. ===")
         return 1
 
@@ -302,9 +397,25 @@ def main() -> int:
         print("\n=== VERDICT: could not complete the port probe -- see the FAIL above. ===")
         return 1
 
-    telemetry = check_ping(args.host, robot_port, listen_port)
-    if telemetry is None:
+    result = check_ping(args.host, robot_port, listen_port)
+    if result is None or result.telemetry is None:
         print("\n=== VERDICT: firmware isn't answering (or the GUI's decode would reject it) -- see step 4. ===")
+        return 1
+
+    modem_sleep_signature = result.successes < result.attempts and (
+        result.rtt_max_ms is not None and result.rtt_max_ms >= _RTT_MODEM_SLEEP_MS
+    )
+    if modem_sleep_signature:
+        print(
+            "\n=== VERDICT: modem-sleep signature -- link works, but not reliably enough for the GUI. ===\n"
+            f"{result.successes}/{result.attempts} pings got a reply, and the replies that arrived took up to "
+            f"{result.rtt_max_ms:.0f}ms. This is not a wiring, address, or firmware-logic problem: it's the "
+            "ESP32's WiFi radio powering down between packets and taking too long to wake, so most packets "
+            "are lost and the ones that land arrive too late for the GUI's link timeout. Fix in firmware: "
+            "disable WiFi power save (esp_wifi_set_ps(WIFI_PS_NONE), called once WiFi association succeeds) "
+            "-- see docs/HOW_TO_USE.md's link troubleshooting section for the full explanation and expected "
+            "RTT after the fix."
+        )
         return 1
 
     print(
